@@ -1,0 +1,3569 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="基于 vLLM 提交 101584af0 的 vllm serve 服务启动全链路源码分析。">
+  <title>vLLM 服务启动链路剖析 · 101584af0</title>
+  <style>
+    :root {
+      --bg: #f4f6f5;
+      --surface: #ffffff;
+      --surface-2: #eef2f0;
+      --surface-3: #e5ebe8;
+      --text: #17201d;
+      --muted: #5f6d68;
+      --border: #d4ddd9;
+      --border-strong: #b8c6c0;
+      --accent: #0b7568;
+      --accent-soft: #d9efea;
+      --accent-2: #a34e1d;
+      --accent-2-soft: #f7e6d9;
+      --blue: #315f93;
+      --blue-soft: #e1eaf4;
+      --green: #28724f;
+      --green-soft: #dff0e6;
+      --red: #a13c3c;
+      --red-soft: #f6e2e2;
+      --yellow: #8a6a0a;
+      --yellow-soft: #f5edca;
+      --code-bg: #18201e;
+      --code-text: #e4ece9;
+      --code-muted: #8fa29b;
+      --shadow: 0 12px 32px rgba(23, 32, 29, 0.08);
+      --radius: 8px;
+      --font: "Noto Sans CJK SC", "Source Han Sans SC", "PingFang SC",
+        "Microsoft YaHei", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      --mono: "SFMono-Regular", "Cascadia Code", "JetBrains Mono", Consolas,
+        "Liberation Mono", monospace;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #111714;
+        --surface: #18211e;
+        --surface-2: #202b27;
+        --surface-3: #293630;
+        --text: #e9efec;
+        --muted: #acbab4;
+        --border: #34443d;
+        --border-strong: #4a5e55;
+        --accent: #61c7b7;
+        --accent-soft: #173d37;
+        --accent-2: #e89b68;
+        --accent-2-soft: #442a1c;
+        --blue: #8eb9ea;
+        --blue-soft: #1b3048;
+        --green: #8fd9ad;
+        --green-soft: #1b3a29;
+        --red: #f29b9b;
+        --red-soft: #462323;
+        --yellow: #e5cd78;
+        --yellow-soft: #3e371a;
+        --code-bg: #0b100e;
+        --code-text: #e2ebe7;
+        --code-muted: #879b93;
+        --shadow: 0 16px 36px rgba(0, 0, 0, 0.28);
+      }
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+      scroll-padding-top: 84px;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 16px;
+      line-height: 1.72;
+      text-rendering: optimizeLegibility;
+    }
+
+    a {
+      color: var(--accent);
+      text-decoration-thickness: 1px;
+      text-underline-offset: 3px;
+    }
+
+    a:hover {
+      color: var(--accent-2);
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    button:focus-visible,
+    input:focus-visible,
+    a:focus-visible {
+      outline: 3px solid color-mix(in srgb, var(--accent) 65%, transparent);
+      outline-offset: 3px;
+    }
+
+    .skip-link {
+      position: absolute;
+      left: 12px;
+      top: -60px;
+      z-index: 100;
+      padding: 8px 12px;
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius);
+    }
+
+    .skip-link:focus {
+      top: 12px;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) minmax(280px, 540px);
+      gap: 24px;
+      align-items: center;
+      min-height: 64px;
+      padding: 10px 28px;
+      background: color-mix(in srgb, var(--surface) 92%, transparent);
+      border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(14px);
+    }
+
+    .brand {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      min-width: 0;
+    }
+
+    .brand-mark {
+      display: grid;
+      flex: 0 0 34px;
+      width: 34px;
+      height: 34px;
+      place-items: center;
+      border: 1px solid var(--border-strong);
+      border-radius: 8px;
+      background: var(--surface-2);
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .brand-copy {
+      min-width: 0;
+    }
+
+    .brand-title {
+      display: block;
+      overflow: hidden;
+      color: var(--text);
+      font-size: 15px;
+      font-weight: 650;
+      line-height: 1.3;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .brand-subtitle {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .search-box {
+      display: grid;
+      grid-template-columns: 20px minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      padding: 8px 11px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+
+    .search-box:focus-within {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+    }
+
+    .search-box svg {
+      width: 18px;
+      height: 18px;
+      color: var(--muted);
+    }
+
+    .search-box input {
+      width: 100%;
+      min-width: 0;
+      padding: 0;
+      background: transparent;
+      border: 0;
+      color: var(--text);
+      outline: 0;
+    }
+
+    .search-box input::placeholder {
+      color: var(--muted);
+    }
+
+    .search-count {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .toc-toggle {
+      display: none;
+      width: 38px;
+      height: 38px;
+      padding: 8px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      cursor: pointer;
+    }
+
+    .toc-toggle span {
+      display: block;
+      width: 100%;
+      height: 2px;
+      margin: 4px 0;
+      background: currentColor;
+      border-radius: 1px;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 292px minmax(0, 1fr);
+      gap: 0;
+      max-width: 1540px;
+      margin: 0 auto;
+    }
+
+    .toc {
+      align-self: start;
+      max-height: calc(100vh - 64px);
+      padding: 24px 20px 36px 28px;
+      overflow-y: auto;
+      position: sticky;
+      top: 64px;
+    }
+
+    .toc-title {
+      margin: 0 0 14px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .toc ol {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .toc li {
+      margin: 2px 0;
+    }
+
+    .toc a {
+      display: grid;
+      grid-template-columns: 30px minmax(0, 1fr);
+      gap: 6px;
+      padding: 7px 9px;
+      border-left: 2px solid transparent;
+      border-radius: 0 6px 6px 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.4;
+      text-decoration: none;
+    }
+
+    .toc a:hover {
+      background: var(--surface-2);
+      color: var(--text);
+    }
+
+    .toc a.is-active {
+      background: var(--accent-soft);
+      border-left-color: var(--accent);
+      color: var(--text);
+      font-weight: 650;
+    }
+
+    .toc-num {
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .toc-meta {
+      margin-top: 22px;
+      padding-top: 18px;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.65;
+    }
+
+    .toc-meta code {
+      color: var(--text);
+    }
+
+    .nowrap {
+      white-space: nowrap;
+    }
+
+    .call-map {
+      padding-top: 48px;
+    }
+
+    .call-map-intro {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(260px, 0.65fr);
+      gap: 26px;
+      align-items: start;
+      margin-bottom: 26px;
+    }
+
+    .call-map-intro h1 {
+      margin-bottom: 14px;
+      font-size: clamp(30px, 3.4vw, 46px);
+    }
+
+    .mode-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 0;
+      padding: 14px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      border-radius: var(--radius);
+    }
+
+    .mode-legend span {
+      display: inline-flex;
+      gap: 6px;
+      align-items: center;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.4;
+    }
+
+    .map-phases {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      gap: 12px;
+      margin: 28px 0 14px;
+      padding: 0;
+      list-style: none;
+    }
+
+    .map-phases li {
+      position: relative;
+      min-width: 0;
+      padding: 13px 12px;
+      border: 1px solid var(--border);
+      border-top: 3px solid var(--accent);
+      background: var(--surface);
+      border-radius: var(--radius);
+    }
+
+    .map-phases li::after {
+      content: "→";
+      position: absolute;
+      top: 50%;
+      right: -10px;
+      z-index: 1;
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 13px;
+      transform: translateY(-50%);
+    }
+
+    .map-phases li:last-child::after {
+      content: none;
+    }
+
+    .map-phases li:nth-child(2),
+    .map-phases li:nth-child(5) {
+      border-top-color: var(--blue);
+    }
+
+    .map-phases li:nth-child(3),
+    .map-phases li:nth-child(6) {
+      border-top-color: var(--accent-2);
+    }
+
+    .map-phases strong {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .map-phases small {
+      display: block;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 10px;
+      line-height: 1.5;
+    }
+
+    .call-sequence {
+      margin: 20px 0 30px;
+      border-top: 1px solid var(--border);
+    }
+
+    .call-phase {
+      display: grid;
+      grid-template-columns: 54px minmax(0, 1fr);
+      gap: 12px;
+      align-items: center;
+      margin: 28px 0 6px;
+      padding: 9px 0 8px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .call-phase:first-child {
+      margin-top: 0;
+    }
+
+    .call-phase-letter {
+      display: grid;
+      width: 40px;
+      height: 40px;
+      place-items: center;
+      border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--border));
+      border-radius: 6px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .call-phase-copy strong {
+      display: block;
+      font-size: 15px;
+      line-height: 1.35;
+    }
+
+    .call-phase-copy span {
+      display: block;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .call-row {
+      display: grid;
+      grid-template-columns: 44px 88px minmax(220px, 0.9fr) minmax(0, 1.75fr);
+      gap: 12px;
+      align-items: start;
+      padding: 12px 10px;
+      border-bottom: 1px solid var(--border);
+      background: color-mix(in srgb, var(--surface) 64%, transparent);
+    }
+
+    .call-row:nth-of-type(even) {
+      background: color-mix(in srgb, var(--surface-2) 58%, transparent);
+    }
+
+    .call-step {
+      padding-top: 4px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+      text-align: right;
+    }
+
+    .call-mode-cell {
+      padding-top: 2px;
+    }
+
+    .mode {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 1px 6px;
+      border: 1px solid var(--border-strong);
+      border-radius: 4px;
+      background: var(--surface-2);
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 9px;
+      font-weight: 700;
+      line-height: 1.25;
+      white-space: nowrap;
+    }
+
+    .mode.sync {
+      border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+
+    .mode.async {
+      border-color: color-mix(in srgb, var(--blue) 40%, var(--border));
+      background: var(--blue-soft);
+      color: var(--blue);
+    }
+
+    .mode.process {
+      border-color: color-mix(in srgb, var(--accent-2) 40%, var(--border));
+      background: var(--accent-2-soft);
+      color: var(--accent-2);
+    }
+
+    .mode.wait {
+      border-color: color-mix(in srgb, var(--yellow) 42%, var(--border));
+      background: var(--yellow-soft);
+      color: var(--yellow);
+    }
+
+    .mode.thread {
+      border-color: color-mix(in srgb, var(--green) 40%, var(--border));
+      background: var(--green-soft);
+      color: var(--green);
+    }
+
+    .mode.task {
+      border-color: color-mix(in srgb, var(--green) 40%, var(--border));
+      background: var(--green-soft);
+      color: var(--green);
+    }
+
+    .mode.rpc {
+      border-color: color-mix(in srgb, var(--red) 34%, var(--border));
+      background: var(--red-soft);
+      color: var(--red);
+    }
+
+    .mode.branch {
+      border-color: color-mix(in srgb, var(--blue) 40%, var(--border));
+      background: var(--blue-soft);
+      color: var(--blue);
+    }
+
+    .call-route {
+      min-width: 0;
+      font-family: var(--mono);
+      font-size: 11.5px;
+      line-height: 1.55;
+      overflow-wrap: anywhere;
+    }
+
+    .call-route .caller,
+    .call-route .callee {
+      color: var(--text);
+    }
+
+    .call-route .call-arrow {
+      padding-inline: 5px;
+      color: var(--accent);
+    }
+
+    .call-note {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .call-note strong {
+      color: var(--text);
+      font-weight: 650;
+    }
+
+    .call-source {
+      display: flex;
+      grid-column: 3 / -1;
+      flex-wrap: wrap;
+      gap: 5px 10px;
+      align-items: center;
+      margin-top: 7px;
+      padding-top: 7px;
+      border-top: 1px dashed var(--border);
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.5;
+    }
+
+    .call-source-label {
+      display: inline-flex;
+      padding: 0 5px;
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      background: var(--surface-2);
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 9px;
+      font-weight: 700;
+    }
+
+    .call-source code {
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: var(--text);
+      font-size: 10px;
+      overflow-wrap: anywhere;
+      word-break: break-all;
+    }
+
+    .call-source a {
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 700;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+
+    .call-source a:hover {
+      color: var(--accent-2);
+      text-decoration: underline;
+    }
+
+    .call-branch-note {
+      margin-top: 24px;
+      padding: 15px 16px;
+      border-left: 4px solid var(--blue);
+      background: var(--blue-soft);
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .call-branch-note strong {
+      color: var(--text);
+    }
+
+    main {
+      min-width: 0;
+      padding: 0 40px 72px;
+    }
+
+    .overview,
+    .chapter {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 54px 0 58px;
+      border-bottom: 1px solid var(--border);
+      scroll-margin-top: 84px;
+    }
+
+    .overview {
+      padding-top: 64px;
+    }
+
+    .chapter:last-of-type {
+      border-bottom: 0;
+    }
+
+    .eyebrow {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 12px;
+      align-items: center;
+      margin-bottom: 14px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .commit-chip,
+    .phase-chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 3px 9px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--surface-2);
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0;
+      text-transform: none;
+    }
+
+    h1,
+    h2,
+    h3,
+    h4 {
+      color: var(--text);
+      font-weight: 700;
+      line-height: 1.25;
+    }
+
+    h1 {
+      max-width: 980px;
+      margin: 0 0 18px;
+      font-size: clamp(34px, 4vw, 52px);
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin: 0 0 18px;
+      font-size: clamp(26px, 3vw, 38px);
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 34px 0 13px;
+      font-size: 22px;
+    }
+
+    h4 {
+      margin: 24px 0 10px;
+      font-size: 17px;
+    }
+
+    p {
+      margin: 0 0 16px;
+    }
+
+    .lead {
+      max-width: 900px;
+      color: var(--muted);
+      font-size: 18px;
+      line-height: 1.75;
+    }
+
+    .scope-note {
+      margin: 26px 0 0;
+      padding: 14px 16px;
+      border-left: 4px solid var(--accent);
+      background: var(--surface-2);
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .scope-note strong {
+      color: var(--text);
+    }
+
+    .pipeline {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 24px;
+      margin: 28px 0 16px;
+      padding: 0;
+      list-style: none;
+    }
+
+    .pipeline li {
+      position: relative;
+      min-width: 0;
+      padding: 16px 14px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-top: 3px solid var(--accent);
+      border-radius: var(--radius);
+    }
+
+    .pipeline li::after {
+      content: "→";
+      position: absolute;
+      top: 50%;
+      right: -18px;
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 16px;
+      transform: translateY(-50%);
+    }
+
+    .pipeline li:last-child::after {
+      content: none;
+    }
+
+    .pipeline .step-kicker {
+      display: block;
+      margin-bottom: 5px;
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+
+    .pipeline strong {
+      display: block;
+      font-size: 14px;
+      line-height: 1.4;
+    }
+
+    .pipeline small {
+      display: block;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .sequence-wrap {
+      margin: 26px 0 8px;
+      padding: 18px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      overflow: hidden;
+    }
+
+    .sequence {
+      display: grid;
+      grid-template-columns: 104px 1.2fr 1.2fr 1.2fr 1.1fr;
+      min-width: 0;
+    }
+
+    .seq-head,
+    .seq-time,
+    .seq-cell {
+      padding: 10px;
+      border-right: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .seq-head {
+      background: var(--surface-2);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-align: center;
+    }
+
+    .seq-head:first-child {
+      border-top-left-radius: 6px;
+    }
+
+    .seq-head:last-child {
+      border-top-right-radius: 6px;
+    }
+
+    .seq-time {
+      display: flex;
+      align-items: center;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .seq-cell {
+      min-height: 64px;
+      background: color-mix(in srgb, var(--surface-2) 48%, transparent);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .seq-cell:last-child {
+      border-right: 0;
+    }
+
+    .sequence > :nth-last-child(-n + 5) {
+      border-bottom: 0;
+    }
+
+    .event {
+      display: block;
+      height: 100%;
+      padding: 8px 9px;
+      border-left: 3px solid var(--accent);
+      border-radius: 0 5px 5px 0;
+      background: var(--accent-soft);
+      color: var(--text);
+    }
+
+    .event.process {
+      border-left-color: var(--blue);
+      background: var(--blue-soft);
+    }
+
+    .event.worker {
+      border-left-color: var(--accent-2);
+      background: var(--accent-2-soft);
+    }
+
+    .event.http {
+      border-left-color: var(--green);
+      background: var(--green-soft);
+    }
+
+    .event-idle {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .actor-label {
+      display: none;
+    }
+
+    .chapter-nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      justify-content: space-between;
+      margin-top: 38px;
+      padding-top: 18px;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .contract {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1px;
+      margin: 26px 0 30px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--border);
+    }
+
+    .contract > div {
+      padding: 15px 16px;
+      background: var(--surface);
+    }
+
+    .contract dt {
+      margin-bottom: 5px;
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
+
+    .contract dd {
+      margin: 0;
+      color: var(--text);
+      font-size: 14px;
+      line-height: 1.65;
+    }
+
+    .contract code,
+    .source-line code,
+    p code,
+    li code,
+    td code,
+    dd code {
+      padding: 2px 5px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: var(--surface-2);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 0.88em;
+      overflow-wrap: anywhere;
+    }
+
+    .source-line {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 14px;
+      align-items: center;
+      margin: 14px 0 22px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .source-line::before {
+      content: "源码";
+      display: inline-flex;
+      padding: 1px 7px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .call-chain {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin: 24px 0;
+    }
+
+    .call-chain > div {
+      padding: 14px 15px;
+      border-top: 3px solid var(--border-strong);
+      background: var(--surface);
+    }
+
+    .call-chain > div:nth-child(3n + 1) {
+      border-top-color: var(--accent);
+    }
+
+    .call-chain > div:nth-child(3n + 2) {
+      border-top-color: var(--blue);
+    }
+
+    .call-chain > div:nth-child(3n) {
+      border-top-color: var(--accent-2);
+    }
+
+    .call-chain strong {
+      display: block;
+      margin-bottom: 5px;
+      font-family: var(--mono);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+
+    .call-chain span {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .table-wrap {
+      margin: 22px 0;
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    table {
+      width: 100%;
+      min-width: 760px;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+
+    th,
+    td {
+      padding: 11px 13px;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--surface-2);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 23px;
+      padding: 1px 7px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .tag.main {
+      background: var(--accent-soft);
+      border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+      color: var(--accent);
+    }
+
+    .tag.branch {
+      background: var(--blue-soft);
+      border-color: color-mix(in srgb, var(--blue) 35%, var(--border));
+      color: var(--blue);
+    }
+
+    .tag.error {
+      background: var(--red-soft);
+      border-color: color-mix(in srgb, var(--red) 35%, var(--border));
+      color: var(--red);
+    }
+
+    .tag.fallback {
+      background: var(--yellow-soft);
+      border-color: color-mix(in srgb, var(--yellow) 35%, var(--border));
+      color: var(--yellow);
+    }
+
+    .diagram {
+      margin: 26px 0;
+      padding: 18px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    .diagram figcaption,
+    .sequence-caption {
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .lane-diagram {
+      display: grid;
+      grid-template-columns: 118px repeat(4, minmax(0, 1fr));
+      gap: 1px;
+      overflow: hidden;
+      border-radius: 6px;
+      background: var(--border);
+    }
+
+    .lane-name,
+    .lane-cell {
+      min-height: 72px;
+      padding: 12px;
+      background: var(--surface);
+    }
+
+    .lane-name {
+      display: flex;
+      align-items: center;
+      background: var(--surface-2);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .lane-cell {
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .lane-cell strong {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--text);
+      font-size: 13px;
+    }
+
+    .lane-cell small {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .lane-cell.host {
+      background: color-mix(in srgb, var(--accent-soft) 56%, var(--surface));
+    }
+
+    .lane-cell.core {
+      background: color-mix(in srgb, var(--blue-soft) 56%, var(--surface));
+    }
+
+    .lane-cell.worker {
+      background: color-mix(in srgb, var(--accent-2-soft) 56%, var(--surface));
+    }
+
+    .lane-cell.http {
+      background: color-mix(in srgb, var(--green-soft) 56%, var(--surface));
+    }
+
+    .branch-tree {
+      margin: 26px 0;
+    }
+
+    .branch-root {
+      display: inline-flex;
+      padding: 9px 13px;
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      background: var(--surface-2);
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .branch-list {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin: 18px 0 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .branch-list li {
+      padding: 15px 16px 15px 18px;
+      border-left: 4px solid var(--accent);
+      background: var(--surface);
+    }
+
+    .branch-list li:nth-child(2) {
+      border-left-color: var(--blue);
+    }
+
+    .branch-list li:nth-child(3) {
+      border-left-color: var(--accent-2);
+    }
+
+    .branch-list strong {
+      display: block;
+      margin-bottom: 7px;
+      font-size: 15px;
+    }
+
+    .branch-list span {
+      display: block;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .callout {
+      margin: 22px 0;
+      padding: 16px 18px;
+      border-left: 4px solid var(--blue);
+      background: var(--blue-soft);
+    }
+
+    .callout.warning {
+      border-left-color: var(--accent-2);
+      background: var(--accent-2-soft);
+    }
+
+    .callout.error {
+      border-left-color: var(--red);
+      background: var(--red-soft);
+    }
+
+    .callout strong {
+      display: block;
+      margin-bottom: 5px;
+    }
+
+    .callout p:last-child {
+      margin-bottom: 0;
+    }
+
+    .code-block {
+      margin: 22px 0 28px;
+      overflow: hidden;
+      border: 1px solid color-mix(in srgb, var(--border-strong) 60%, transparent);
+      border-radius: var(--radius);
+      background: var(--code-bg);
+      box-shadow: var(--shadow);
+    }
+
+    .code-head {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 18px;
+      justify-content: space-between;
+      padding: 9px 14px;
+      border-bottom: 1px solid #31403a;
+      color: var(--code-muted);
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+
+    .code-head a {
+      color: #95d6c8;
+    }
+
+    pre {
+      margin: 0;
+      padding: 14px 0 16px;
+      overflow-x: auto;
+      color: var(--code-text);
+      font-family: var(--mono);
+      font-size: 12.5px;
+      line-height: 1.65;
+      tab-size: 4;
+    }
+
+    .code-line {
+      display: grid;
+      grid-template-columns: 48px minmax(0, 1fr);
+      min-width: max-content;
+      padding: 0 16px 0 0;
+    }
+
+    .ln {
+      padding-right: 13px;
+      color: #62736c;
+      text-align: right;
+      user-select: none;
+    }
+
+    .lc {
+      white-space: pre;
+    }
+
+    .kw {
+      color: #7dd3c4;
+    }
+
+    .fn {
+      color: #f1c27d;
+    }
+
+    .str {
+      color: #c9e49a;
+    }
+
+    .cm {
+      color: #7f928b;
+    }
+
+    .formula {
+      margin: 20px 0;
+      padding: 14px 16px;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .formula code {
+      color: var(--text);
+    }
+
+    ul.plain {
+      margin: 12px 0 20px;
+      padding-left: 22px;
+    }
+
+    ul.plain li {
+      margin: 6px 0;
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 22px;
+      margin: 22px 0;
+    }
+
+    .two-col > div {
+      padding-top: 14px;
+      border-top: 1px solid var(--border);
+    }
+
+    .two-col h4 {
+      margin-top: 0;
+    }
+
+    .is-filtered {
+      display: none !important;
+    }
+
+    .no-results {
+      display: none;
+      max-width: 760px;
+      margin: 46px auto;
+      padding: 22px;
+      border: 1px dashed var(--border-strong);
+      color: var(--muted);
+      text-align: center;
+    }
+
+    .no-results.is-visible {
+      display: block;
+    }
+
+    footer {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 0 40px 48px;
+      color: var(--muted);
+      font-size: 12px;
+      text-align: center;
+    }
+
+    .back-top {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    @media (max-width: 1180px) {
+      .pipeline {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .pipeline li:nth-child(3)::after {
+        content: none;
+      }
+
+      .call-chain {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .map-phases {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+
+      .map-phases li:nth-child(4)::after {
+        content: none;
+      }
+    }
+
+    @media (max-width: 980px) {
+      .topbar {
+        grid-template-columns: 44px minmax(0, 1fr);
+        gap: 12px;
+        padding: 10px 16px;
+      }
+
+      .toc-toggle {
+        display: block;
+        grid-column: 1;
+        grid-row: 1;
+      }
+
+      .brand {
+        grid-column: 2;
+        grid-row: 1;
+      }
+
+      .brand-mark {
+        display: none;
+      }
+
+      .search-box {
+        grid-column: 1 / -1;
+        grid-row: 2;
+      }
+
+      .topbar {
+        min-height: 112px;
+      }
+
+      html {
+        scroll-padding-top: 124px;
+      }
+
+      .layout {
+        display: block;
+      }
+
+      .toc {
+        display: none;
+        position: sticky;
+        top: 112px;
+        z-index: 40;
+        max-height: calc(100vh - 112px);
+        padding: 18px 18px 24px;
+        background: var(--surface);
+        border-right: 1px solid var(--border);
+        border-bottom: 1px solid var(--border);
+        box-shadow: var(--shadow);
+      }
+
+      body.toc-open .toc {
+        display: block;
+      }
+
+      main {
+        padding: 0 24px 64px;
+      }
+
+      .overview,
+      .chapter {
+        scroll-margin-top: 124px;
+      }
+
+      .lane-diagram {
+        grid-template-columns: 96px repeat(4, minmax(0, 1fr));
+      }
+
+      .lane-name,
+      .lane-cell {
+        padding: 9px;
+      }
+    }
+
+    @media (max-width: 760px) {
+      body {
+        font-size: 15px;
+      }
+
+      h1 {
+        font-size: 34px;
+      }
+
+      h2 {
+        font-size: 27px;
+      }
+
+      .overview,
+      .chapter {
+        padding: 42px 0 46px;
+      }
+
+      .lead {
+        font-size: 16px;
+      }
+
+      .pipeline,
+      .call-chain,
+      .branch-list,
+      .contract,
+      .two-col,
+      .call-map-intro {
+        grid-template-columns: 1fr;
+      }
+
+      .pipeline {
+        gap: 18px;
+      }
+
+      .pipeline li::after {
+        content: "↓";
+        top: auto;
+        right: 50%;
+        bottom: -19px;
+        transform: translateX(50%);
+      }
+
+      .pipeline li:nth-child(3)::after {
+        content: "↓";
+      }
+
+      .pipeline li:last-child::after {
+        content: none;
+      }
+
+      .map-phases {
+        grid-template-columns: 1fr;
+        gap: 16px;
+      }
+
+      .map-phases li::after,
+      .map-phases li:nth-child(4)::after {
+        content: "↓";
+        top: auto;
+        right: 50%;
+        bottom: -12px;
+        transform: translateX(50%);
+      }
+
+      .map-phases li:last-child::after {
+        content: none;
+      }
+
+      .call-phase {
+        grid-template-columns: 44px minmax(0, 1fr);
+      }
+
+      .call-row {
+        grid-template-columns: 34px minmax(0, 1fr);
+        gap: 4px 10px;
+        padding: 13px 6px;
+      }
+
+      .call-step {
+        grid-row: 1 / span 3;
+      }
+
+      .call-mode-cell,
+      .call-route,
+      .call-note,
+      .call-source {
+        grid-column: 2;
+      }
+
+      .call-route {
+        font-size: 11px;
+      }
+
+      .call-source {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 4px 8px;
+      }
+
+      .call-source a {
+        grid-column: 1 / -1;
+        white-space: normal;
+      }
+
+      .sequence {
+        display: block;
+      }
+
+      .seq-head,
+      .seq-time {
+        display: none;
+      }
+
+      .seq-cell {
+        display: block;
+        min-height: 0;
+        margin: 8px 0;
+        padding: 0;
+        border: 0;
+        background: transparent;
+      }
+
+      .seq-cell:empty {
+        display: none;
+      }
+
+      .actor-label {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+      }
+
+      .event {
+        min-height: 0;
+      }
+
+      .lane-diagram {
+        display: block;
+      }
+
+      .lane-name {
+        min-height: 0;
+        margin-top: 12px;
+        padding: 6px 9px;
+        border-radius: 4px;
+      }
+
+      .lane-cell {
+        min-height: 0;
+        margin-top: 4px;
+      }
+
+      .lane-cell:empty {
+        display: none;
+      }
+
+      .diagram,
+      .sequence-wrap {
+        padding: 12px;
+      }
+
+      table {
+        min-width: 640px;
+      }
+
+      footer {
+        padding-inline: 24px;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .topbar {
+        padding-inline: 12px;
+      }
+
+      main {
+        padding-inline: 16px;
+      }
+
+      h1 {
+        font-size: 30px;
+      }
+
+      .search-count {
+        display: none;
+      }
+
+      .source-line {
+        align-items: flex-start;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html {
+        scroll-behavior: auto;
+      }
+
+      *,
+      *::before,
+      *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+      }
+    }
+
+    @media print {
+      body {
+        background: #fff;
+        color: #000;
+        font-size: 11pt;
+      }
+
+      .topbar,
+      .toc,
+      .toc-toggle,
+      .search-box,
+      .back-top {
+        display: none !important;
+      }
+
+      .layout {
+        display: block;
+      }
+
+      main,
+      footer {
+        max-width: none;
+        padding: 0;
+      }
+
+      .overview,
+      .chapter {
+        max-width: none;
+        padding: 24px 0;
+        break-inside: avoid-page;
+      }
+
+      .code-block {
+        box-shadow: none;
+        break-inside: avoid;
+      }
+
+      a {
+        color: inherit;
+      }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">跳到正文</a>
+
+  <header class="topbar">
+    <button class="toc-toggle" id="toc-toggle" type="button" aria-label="切换目录" aria-expanded="false" aria-controls="toc">
+      <span></span><span></span><span></span>
+    </button>
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">vL</div>
+      <div class="brand-copy">
+        <span class="brand-title">vLLM 服务启动链路剖析</span>
+        <span class="brand-subtitle">commit 101584af0 · 2026-04-23</span>
+      </div>
+    </div>
+    <label class="search-box" for="doc-search">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <circle cx="11" cy="11" r="7"></circle>
+        <path d="m20 20-4-4"></path>
+      </svg>
+      <input id="doc-search" type="search" autocomplete="off" placeholder="搜索调用、类名、源码路径或错误路径">
+      <span class="search-count" id="search-count" aria-live="polite">18 章</span>
+    </label>
+  </header>
+
+  <div class="layout">
+    <aside class="toc" id="toc" aria-label="文档目录">
+      <p class="toc-title">Contents</p>
+      <ol>
+        <li><a href="#call-map"><span class="toc-num">图</span><span>完整调用时序与同步/异步</span></a></li>
+        <li><a href="#overview"><span class="toc-num">00</span><span>范围、基线与全景</span></a></li>
+        <li><a href="#cli-entry"><span class="toc-num">01</span><span>命令行入口与参数分发</span></a></li>
+        <li><a href="#serve-routing"><span class="toc-num">02</span><span>serve 路由与 API 进程数</span></a></li>
+        <li><a href="#bind-socket"><span class="toc-num">03</span><span>预绑定监听 socket</span></a></li>
+        <li><a href="#engine-config"><span class="toc-num">04</span><span>AsyncEngineArgs 到 VllmConfig</span></a></li>
+        <li><a href="#async-llm"><span class="toc-num">05</span><span>AsyncLLM 与客户端选择</span></a></li>
+        <li><a href="#launch-core"><span class="toc-num">06</span><span>launch_core_engines</span></a></li>
+        <li><a href="#engine-core-proc"><span class="toc-num">07</span><span>EngineCoreProc 初始化与握手</span></a></li>
+        <li><a href="#executor"><span class="toc-num">08</span><span>Executor 选择与进程模型</span></a></li>
+        <li><a href="#worker-init"><span class="toc-num">09</span><span>Worker 与设备初始化</span></a></li>
+        <li><a href="#model-load"><span class="toc-num">10</span><span>模型加载与权重后处理</span></a></li>
+        <li><a href="#kv-cache"><span class="toc-num">11</span><span>KV Cache 预算、分配与预热</span></a></li>
+        <li><a href="#ready-handshake"><span class="toc-num">12</span><span>引擎就绪回传与配置同步</span></a></li>
+        <li><a href="#fastapi-app"><span class="toc-num">13</span><span>FastAPI 路由与 app.state</span></a></li>
+        <li><a href="#uvicorn"><span class="toc-num">14</span><span>Uvicorn 启动、监听与看门狗</span></a></li>
+        <li><a href="#branches-errors"><span class="toc-num">15</span><span>分支、异常与关闭路径</span></a></li>
+        <li><a href="#chain-appendix"><span class="toc-num">16</span><span>完整调用链与源码索引</span></a></li>
+      </ol>
+      <div class="toc-meta">
+        分析对象：<code>vllm-project/vllm</code><br>
+        HEAD：<code>101584af0</code><br>
+        视角：CUDA + OpenAI HTTP 服务主路径
+      </div>
+    </aside>
+
+    <main id="main-content">
+      <section class="chapter call-map" id="call-map" aria-labelledby="call-map-title">
+        <div class="eyebrow">
+          <span class="phase-chip">CALL MAP</span>
+          <span class="commit-chip">SYNC / ASYNC / PROCESS / THREAD / TASK / WAIT / RPC</span>
+        </div>
+        <div class="call-map-intro">
+          <div>
+            <h2 id="call-map-title">完整启动调用时序：从 shell 命令到 HTTP 可服务</h2>
+            <p class="lead">
+              下面按真实调用顺序展开主链路，并把启动分支也放入同一张调用图。
+              每一行都标明调用方、被调用方、执行模型、关键入参、返回值或副作用，以及下一跳；
+              行末附文件绝对路径、所属类或模块，以及可点击的源码行链接。
+            </p>
+          </div>
+          <div class="mode-legend" aria-label="调用类型图例">
+            <span><b class="mode sync">SYNC</b>当前调用栈内同步返回</span>
+            <span><b class="mode async">ASYNC</b>事件循环中 await / async context</span>
+            <span><b class="mode wait">WAIT</b>调用方阻塞等待结果</span>
+            <span><b class="mode rpc">RPC</b>跨进程请求与响应</span>
+            <span><b class="mode process">PROCESS</b>创建或进入新进程</span>
+            <span><b class="mode thread">THREAD</b>启动后台线程</span>
+            <span><b class="mode task">TASK</b>创建 asyncio task</span>
+            <span><b class="mode branch">BRANCH</b>条件分支，不进入默认主链</span>
+          </div>
+        </div>
+
+        <ol class="map-phases" aria-label="完整调用图的七个阶段">
+          <li><strong>A · CLI 与拓扑</strong><small>console → cmd</small></li>
+          <li><strong>B · Socket 与配置</strong><small>bind → VllmConfig</small></li>
+          <li><strong>C · EngineCore 启动</strong><small>AsyncLLM → handshake</small></li>
+          <li><strong>D · Executor / Worker</strong><small>device → runner</small></li>
+          <li><strong>E · 模型加载</strong><small>model → weights</small></li>
+          <li><strong>F · KV 与 ready</strong><small>profile → ready</small></li>
+          <li><strong>G · FastAPI / HTTP</strong><small>app → listen</small></li>
+        </ol>
+
+        <div class="call-sequence" aria-label="逐调用启动时序表">
+          <div class="call-phase">
+            <div class="call-phase-letter">A</div>
+            <div class="call-phase-copy"><strong>命令行入口与服务拓扑</strong><span>默认单 API server；多 API server 与 headless 在这里分叉。</span></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">01</div>
+            <div class="call-mode-cell"><span class="mode sync">SYNC</span></div>
+            <div class="call-route"><span class="caller">console script <code>vllm</code></span><span class="call-arrow">→</span><span class="callee"><code>main()</code></span></div>
+            <div class="call-note"><strong>入</strong> <code>sys.argv</code>；<strong>出</strong> 无返回值；<strong>下一跳</strong> 构建 parser 后调用 <code>dispatch_function</code>。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/entrypoints/cli/main.py</code><span class="call-source-label">所属类</span><code>无（模块函数 main）</code><a href="file:///opt/work/codes/github/vllm/vllm/entrypoints/cli/main.py#L16" target="_blank" rel="noopener">查看源码 L16 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">02</div>
+            <div class="call-mode-cell"><span class="mode sync">SYNC</span></div>
+            <div class="call-route"><span class="caller"><code>main()</code></span><span class="call-arrow">→</span><span class="callee"><code>ServeSubcommand.cmd(args)</code></span></div>
+            <div class="call-note"><strong>入</strong> argparse Namespace；<strong>出</strong> 无返回值；<strong>下一跳</strong> 归一化 model 与 API server 数量。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/entrypoints/cli/serve.py</code><span class="call-source-label">所属类</span><code>ServeSubcommand</code><a href="file:///opt/work/codes/github/vllm/vllm/entrypoints/cli/serve.py#L43" target="_blank" rel="noopener">查看源码 L43 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">03</div>
+            <div class="call-mode-cell"><span class="mode async">ASYNC LOOP</span></div>
+            <div class="call-route"><span class="caller"><code>ServeSubcommand.cmd</code></span><span class="call-arrow">→</span><span class="callee"><code>uvloop.run(run_server(args))</code></span></div>
+            <div class="call-note"><strong>入</strong> 单 API server args；<strong>出</strong> 事件循环退出时命令结束；<strong>下一跳</strong> <code>run_server</code> 先绑定 socket。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/entrypoints/cli/serve.py</code><span class="call-source-label">所属类</span><code>ServeSubcommand</code><a href="file:///opt/work/codes/github/vllm/vllm/entrypoints/cli/serve.py#L122" target="_blank" rel="noopener">查看源码 L122 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">04</div>
+            <div class="call-mode-cell"><span class="mode branch">BRANCH</span></div>
+            <div class="call-route"><span class="caller"><code>ServeSubcommand.cmd</code></span><span class="call-arrow">→</span><span class="callee"><code>run_multi_api_server(args)</code></span></div>
+            <div class="call-note"><strong>条件</strong> <code>api_server_count &gt; 1</code>；<strong>出</strong> launcher 统一管理 socket、EngineCore 与 API 子进程；<strong>分支</strong> 不进入默认单进程主链。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/entrypoints/cli/serve.py</code><span class="call-source-label">所属类</span><code>ServeSubcommand / run_multi_api_server</code><a href="file:///opt/work/codes/github/vllm/vllm/entrypoints/cli/serve.py#L231" target="_blank" rel="noopener">查看源码 L231 ↗</a></div>
+          </div>
+
+          <div class="call-phase">
+            <div class="call-phase-letter">B</div>
+            <div class="call-phase-copy"><strong>监听 socket 与引擎配置</strong><span>端口先 bind，模型配置随后解析；权重仍尚未加载。</span></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">05</div>
+            <div class="call-mode-cell"><span class="mode sync">SYNC</span></div>
+            <div class="call-route"><span class="caller"><code>run_server(args)</code></span><span class="call-arrow">→</span><span class="callee"><code>setup_server(args)</code></span></div>
+            <div class="call-note"><strong>入</strong> host、port、uds、TLS、parser 插件参数；<strong>出</strong> <code>(listen_address, sock)</code>；<strong>下一跳</strong> <code>run_server_worker</code>。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/entrypoints/openai/api_server.py</code><span class="call-source-label">所属类</span><code>无（模块函数 run_server）</code><a href="file:///opt/work/codes/github/vllm/vllm/entrypoints/openai/api_server.py#L671" target="_blank" rel="noopener">查看源码 L671 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">06</div>
+            <div class="call-mode-cell"><span class="mode sync">SYNC / OS</span></div>
+            <div class="call-route"><span class="caller"><code>setup_server</code></span><span class="call-arrow">→</span><span class="callee"><code>create_server_socket</code> / <code>bind</code></span></div>
+            <div class="call-note"><strong>入</strong> <code>(host, port)</code> 或 Unix path；<strong>出</strong> 已 bind socket；<strong>下一跳</strong> 在模型加载期间保留端口，Uvicorn 稍后才 accept。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/entrypoints/openai/api_server.py</code><span class="call-source-label">所属类</span><code>无（模块函数 setup_server）</code><a href="file:///opt/work/codes/github/vllm/vllm/entrypoints/openai/api_server.py#L496" target="_blank" rel="noopener">查看源码 L496 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">07</div>
+            <div class="call-mode-cell"><span class="mode async">ASYNC AWAIT</span></div>
+            <div class="call-route"><span class="caller"><code>run_server</code></span><span class="call-arrow">→</span><span class="callee"><code>run_server_worker(...)</code></span></div>
+            <div class="call-note"><strong>入</strong> listen address、已 bind socket、args、client config；<strong>出</strong> server 退出时返回；<strong>下一跳</strong> 先构建 engine client。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/entrypoints/openai/api_server.py</code><span class="call-source-label">所属类</span><code>无（模块函数 run_server_worker）</code><a href="file:///opt/work/codes/github/vllm/vllm/entrypoints/openai/api_server.py#L681" target="_blank" rel="noopener">查看源码 L681 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">08</div>
+            <div class="call-mode-cell"><span class="mode async">ASYNC CM</span></div>
+            <div class="call-route"><span class="caller"><code>run_server_worker</code></span><span class="call-arrow">→</span><span class="callee"><code>build_async_engine_client</code></span></div>
+            <div class="call-note"><strong>入</strong> args 与可选 client config；<strong>出</strong> async context 产出 <code>EngineClient</code>；<strong>退出</strong> 时执行 <code>async_llm.shutdown()</code>。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/entrypoints/openai/api_server.py</code><span class="call-source-label">所属类</span><code>无（async context manager）</code><a href="file:///opt/work/codes/github/vllm/vllm/entrypoints/openai/api_server.py#L78" target="_blank" rel="noopener">查看源码 L78 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">09</div>
+            <div class="call-mode-cell"><span class="mode sync">SYNC</span></div>
+            <div class="call-route"><span class="caller"><code>build_async_engine_client</code></span><span class="call-arrow">→</span><span class="callee"><code>AsyncEngineArgs.from_cli_args(args)</code></span></div>
+            <div class="call-note"><strong>入</strong> CLI Namespace；<strong>出</strong> AsyncEngineArgs；<strong>下一跳</strong> 多 API server 时覆盖 client count/index。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/engine/arg_utils.py</code><span class="call-source-label">所属类</span><code>EngineArgs（AsyncEngineArgs 继承）</code><a href="file:///opt/work/codes/github/vllm/vllm/engine/arg_utils.py#L1425" target="_blank" rel="noopener">查看源码 L1425 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">10</div>
+            <div class="call-mode-cell"><span class="mode sync">SYNC</span></div>
+            <div class="call-route"><span class="caller"><code>build_async_engine_client</code></span><span class="call-arrow">→</span><span class="callee"><code>create_engine_config(...)</code></span></div>
+            <div class="call-note"><strong>入</strong> AsyncEngineArgs、OPENAI_API_SERVER context；<strong>出</strong> <code>VllmConfig</code>；<strong>下一跳</strong> <code>AsyncLLM.from_vllm_config</code>。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/engine/arg_utils.py</code><span class="call-source-label">所属类</span><code>EngineArgs</code><a href="file:///opt/work/codes/github/vllm/vllm/engine/arg_utils.py#L1567" target="_blank" rel="noopener">查看源码 L1567 ↗</a></div>
+          </div>
+
+          <div class="call-phase">
+            <div class="call-phase-letter">C</div>
+            <div class="call-phase-copy"><strong>AsyncLLM、EngineCore 进程与握手</strong><span>同步构造函数内部会启动后台进程，并阻塞等待引擎 ready。</span></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">11</div>
+            <div class="call-mode-cell"><span class="mode wait">SYNC BLOCKING</span></div>
+            <div class="call-route"><span class="caller"><code>build_async_engine_client</code></span><span class="call-arrow">→</span><span class="callee"><code>AsyncLLM.from_vllm_config(...)</code></span></div>
+            <div class="call-note"><strong>入</strong> VllmConfig、日志、client addresses/count/index；<strong>出</strong> 已就绪 AsyncLLM；<strong>注意</strong> 虽在 async 函数内，该构造调用本身同步且阻塞。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/engine/async_llm.py</code><span class="call-source-label">所属类</span><code>AsyncLLM</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/engine/async_llm.py#L205" target="_blank" rel="noopener">查看源码 L205 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">12</div>
+            <div class="call-mode-cell"><span class="mode sync">SYNC</span></div>
+            <div class="call-route"><span class="caller"><code>AsyncLLM.from_vllm_config</code></span><span class="call-arrow">→</span><span class="callee"><code>Executor.get_class(vllm_config)</code></span></div>
+            <div class="call-note"><strong>入</strong> parallel backend、world size；<strong>出</strong> Executor 类；<strong>下一跳</strong> 注入 AsyncLLM 构造参数。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/executor/abstract.py</code><span class="call-source-label">所属类</span><code>Executor</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/executor/abstract.py#L48" target="_blank" rel="noopener">查看源码 L48 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">13</div>
+            <div class="call-mode-cell"><span class="mode sync">SYNC</span></div>
+            <div class="call-route"><span class="caller"><code>AsyncLLM.__init__</code></span><span class="call-arrow">→</span><span class="callee"><code>EngineCoreClient.make_async_mp_client(...)</code></span></div>
+            <div class="call-note"><strong>入</strong> VllmConfig、Executor class、client addresses；<strong>出</strong> AsyncMPClient / DP 客户端；<strong>下一跳</strong> 客户端构造。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/engine/core_client.py</code><span class="call-source-label">所属类</span><code>EngineCoreClient</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/engine/core_client.py#L107" target="_blank" rel="noopener">查看源码 L107 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">14</div>
+            <div class="call-mode-cell"><span class="mode wait">SYNC BLOCKING</span></div>
+            <div class="call-route"><span class="caller"><code>make_async_mp_client</code></span><span class="call-arrow">→</span><span class="callee"><code>MPClient.__init__</code> / <code>AsyncMPClient.__init__</code></span></div>
+            <div class="call-note"><strong>入</strong> asyncio mode、配置、外部或内部 ZMQ 地址；<strong>出</strong> ready 的客户端对象；<strong>下一跳</strong> 启动或连接 EngineCore。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/engine/core_client.py</code><span class="call-source-label">所属类</span><code>MPClient / AsyncMPClient</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/engine/core_client.py#L473" target="_blank" rel="noopener">查看源码 L473 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">15</div>
+            <div class="call-mode-cell"><span class="mode process">PROCESS</span></div>
+            <div class="call-route"><span class="caller"><code>MPClient.__init__</code></span><span class="call-arrow">→</span><span class="callee"><code>launch_core_engines(...)</code></span></div>
+            <div class="call-note"><strong>入</strong> addresses、executor class、log stats；<strong>出</strong> engine manager、coordinator、addresses；<strong>下一跳</strong> 启动 CoreEngineProcManager。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/engine/utils.py</code><span class="call-source-label">所属类</span><code>无（context manager launch_core_engines）</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/engine/utils.py#L955" target="_blank" rel="noopener">查看源码 L955 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">16</div>
+            <div class="call-mode-cell"><span class="mode process">PROCESS SPAWN</span></div>
+            <div class="call-route"><span class="caller"><code>launch_core_engines</code></span><span class="call-arrow">→</span><span class="callee"><code>CoreEngineProcManager.__init__</code></span></div>
+            <div class="call-note"><strong>入</strong> local engine count、start rank、handshake address；<strong>出</strong> EngineCore 子进程列表；<strong>下一跳</strong> 子进程执行 <code>EngineCoreProc.run_engine_core</code>。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/engine/utils.py</code><span class="call-source-label">所属类</span><code>CoreEngineProcManager</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/engine/utils.py#L89" target="_blank" rel="noopener">查看源码 L89 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">17</div>
+            <div class="call-mode-cell"><span class="mode process">PROCESS ENTRY</span></div>
+            <div class="call-route"><span class="caller">new process</span><span class="call-arrow">→</span><span class="callee"><code>EngineCoreProc.run_engine_core(...)</code></span></div>
+            <div class="call-note"><strong>入</strong> vllm_config、dp rank、handshake address；<strong>出</strong> 常驻 busy loop；<strong>异常</strong> 向上抛出并关闭 executor/scheduler。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/engine/core.py</code><span class="call-source-label">所属类</span><code>EngineCoreProc</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/engine/core.py#L1060" target="_blank" rel="noopener">查看源码 L1060 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">18</div>
+            <div class="call-mode-cell"><span class="mode sync">SYNC</span></div>
+            <div class="call-route"><span class="caller"><code>run_engine_core</code></span><span class="call-arrow">→</span><span class="callee"><code>EngineCoreProc.__init__</code></span></div>
+            <div class="call-note"><strong>入</strong> local client、handshake、executor class、log stats；<strong>出</strong> IO 队列与进程状态；<strong>下一跳</strong> ZMQ handshake。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/engine/core.py</code><span class="call-source-label">所属类</span><code>EngineCoreProc</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/engine/core.py#L809" target="_blank" rel="noopener">查看源码 L809 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">19</div>
+            <div class="call-mode-cell"><span class="mode wait">SYNC WAIT</span></div>
+            <div class="call-route"><span class="caller"><code>EngineCoreProc</code></span><span class="call-arrow">↔</span><span class="callee"><code>startup_handshake</code> / launcher</span></div>
+            <div class="call-note"><strong>发</strong> HELLO；<strong>收</strong> EngineHandshakeMetadata 与 input/output addresses；<strong>出</strong> 可继续构造引擎；<strong>超时</strong> RuntimeError。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/engine/core.py</code><span class="call-source-label">所属类</span><code>EngineCoreProc</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/engine/core.py#L1022" target="_blank" rel="noopener">查看源码 L1022 ↗</a></div>
+          </div>
+
+          <div class="call-phase">
+            <div class="call-phase-letter">D</div>
+            <div class="call-phase-copy"><strong>Executor 与 Worker 初始化</strong><span>单 GPU 走同进程 Worker；多 GPU 会 spawn WorkerProc 并等待 ready。</span></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">20</div>
+            <div class="call-mode-cell"><span class="mode sync">SYNC</span></div>
+            <div class="call-route"><span class="caller"><code>EngineCoreProc</code></span><span class="call-arrow">→</span><span class="callee"><code>EngineCore.__init__</code></span></div>
+            <div class="call-note"><strong>入</strong> VllmConfig、Executor class、log stats；<strong>出</strong> scheduler、executor、队列与 step_fn；<strong>下一跳</strong> 构造 Executor。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/engine/core.py</code><span class="call-source-label">所属类</span><code>EngineCore</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/engine/core.py#L92" target="_blank" rel="noopener">查看源码 L92 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">21</div>
+            <div class="call-mode-cell"><span class="mode sync">SYNC</span></div>
+            <div class="call-route"><span class="caller"><code>EngineCore.__init__</code></span><span class="call-arrow">→</span><span class="callee"><code>executor_class(vllm_config)</code></span></div>
+            <div class="call-note"><strong>入</strong> VllmConfig；<strong>出</strong> 已初始化 Executor；<strong>下一跳</strong> Executor 创建 driver worker 或 WorkerProc。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/executor/abstract.py</code><span class="call-source-label">所属类</span><code>Executor</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/executor/abstract.py#L95" target="_blank" rel="noopener">查看源码 L95 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">22</div>
+            <div class="call-mode-cell"><span class="mode sync">SYNC · UNI</span></div>
+            <div class="call-route"><span class="caller"><code>UniProcExecutor</code></span><span class="call-arrow">→</span><span class="callee"><code>WorkerWrapperBase.init_worker</code> → <code>init_device</code> → <code>load_model</code></span></div>
+            <div class="call-note"><strong>条件</strong> 单 worker / backend <code>uni</code>；<strong>入</strong> rank 与 distributed init；<strong>出</strong> 同进程 Worker；<strong>下一跳</strong> EngineCore KV profile。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/executor/uniproc_executor.py</code><span class="call-source-label">所属类</span><code>UniProcExecutor</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/executor/uniproc_executor.py#L27" target="_blank" rel="noopener">查看源码 L27 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">23</div>
+            <div class="call-mode-cell"><span class="mode process">PROCESS WAIT</span></div>
+            <div class="call-route"><span class="caller"><code>MultiprocExecutor</code></span><span class="call-arrow">→</span><span class="callee"><code>WorkerProc.make_worker_process</code> → <code>wait_for_ready</code></span></div>
+            <div class="call-note"><strong>条件</strong> 多 worker / backend <code>mp</code>；<strong>入</strong> local/global rank、shared queue；<strong>出</strong> Worker handles；<strong>失败</strong> 终止其余 worker 并抛错。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/executor/multiproc_executor.py</code><span class="call-source-label">所属类</span><code>MultiprocExecutor / WorkerProc</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/executor/multiproc_executor.py#L109" target="_blank" rel="noopener">查看源码 L109 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">24</div>
+            <div class="call-mode-cell"><span class="mode sync">SYNC</span></div>
+            <div class="call-route"><span class="caller"><code>WorkerProc</code> / <code>UniProcExecutor</code></span><span class="call-arrow">→</span><span class="callee"><code>WorkerWrapperBase.init_worker</code></span></div>
+            <div class="call-note"><strong>入</strong> all_kwargs 中本 rank 的配置；<strong>出</strong> 平台 Worker 实例；<strong>下一跳</strong> <code>GPUWorker.__init__</code>。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/worker/worker_base.py</code><span class="call-source-label">所属类</span><code>WorkerWrapperBase</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/worker/worker_base.py#L222" target="_blank" rel="noopener">查看源码 L222 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">25</div>
+            <div class="call-mode-cell"><span class="mode sync">SYNC</span></div>
+            <div class="call-route"><span class="caller"><code>WorkerWrapperBase</code></span><span class="call-arrow">→</span><span class="callee"><code>GPUWorker.__init__</code></span></div>
+            <div class="call-note"><strong>入</strong> vllm_config、local rank、global rank、distributed method；<strong>出</strong> worker 状态；<strong>下一跳</strong> <code>init_device</code>。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/worker/gpu_worker.py</code><span class="call-source-label">所属类</span><code>Worker</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/worker/gpu_worker.py#L106" target="_blank" rel="noopener">查看源码 L106 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">26</div>
+            <div class="call-mode-cell"><span class="mode sync">SYNC</span></div>
+            <div class="call-route"><span class="caller"><code>GPUWorker</code></span><span class="call-arrow">→</span><span class="callee"><code>init_device()</code></span></div>
+            <div class="call-note"><strong>入</strong> device index、dtype、cache config；<strong>出</strong> CUDA device、memory snapshot、requested memory；<strong>下一跳</strong> 分布式环境初始化。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/worker/gpu_worker.py</code><span class="call-source-label">所属类</span><code>Worker</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/worker/gpu_worker.py#L219" target="_blank" rel="noopener">查看源码 L219 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">27</div>
+            <div class="call-mode-cell"><span class="mode wait">SYNC COLLECTIVE</span></div>
+            <div class="call-route"><span class="caller"><code>GPUWorker.init_device</code></span><span class="call-arrow">→</span><span class="callee"><code>init_worker_distributed_environment(...)</code></span></div>
+            <div class="call-note"><strong>入</strong> rank、local rank、world size、backend；<strong>出</strong> TP/PP/CP 进程组；<strong>等待</strong> 所有 rank 加入后继续。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/worker/gpu_worker.py</code><span class="call-source-label">所属类</span><code>无（模块函数 init_worker_distributed_environment）</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/worker/gpu_worker.py#L1024" target="_blank" rel="noopener">查看源码 L1024 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">28</div>
+            <div class="call-mode-cell"><span class="mode sync">SYNC</span></div>
+            <div class="call-route"><span class="caller"><code>GPUWorker.init_device</code></span><span class="call-arrow">→</span><span class="callee"><code>GPUModelRunner(vllm_config, device)</code></span></div>
+            <div class="call-note"><strong>入</strong> VllmConfig、CUDA device；<strong>出</strong> model runner；<strong>下一跳</strong> <code>Worker.load_model</code>。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/worker/gpu_worker.py</code><span class="call-source-label">所属类</span><code>Worker（构造 GPUModelRunner）</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/worker/gpu_worker.py#L295" target="_blank" rel="noopener">查看源码 L295 ↗</a></div>
+          </div>
+
+          <div class="call-phase">
+            <div class="call-phase-letter">E</div>
+            <div class="call-phase-copy"><strong>模型结构与权重加载</strong><span>这是耗时和显存占用最集中的阶段；调用栈本身是同步 I/O 与 CUDA 操作。</span></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">29</div>
+            <div class="call-mode-cell"><span class="mode sync">SYNC</span></div>
+            <div class="call-route"><span class="caller"><code>Worker</code></span><span class="call-arrow">→</span><span class="callee"><code>load_model()</code></span></div>
+            <div class="call-note"><strong>入</strong> 可选 dummy weights；<strong>出</strong> 无返回值，写入 worker 状态；<strong>下一跳</strong> model runner load。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/worker/gpu_worker.py</code><span class="call-source-label">所属类</span><code>Worker</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/worker/gpu_worker.py#L318" target="_blank" rel="noopener">查看源码 L318 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">30</div>
+            <div class="call-mode-cell"><span class="mode sync">SYNC</span></div>
+            <div class="call-route"><span class="caller"><code>GPUWorker.load_model</code></span><span class="call-arrow">→</span><span class="callee"><code>GPUModelRunner.load_model</code></span></div>
+            <div class="call-note"><strong>入</strong> load_dummy_weights；<strong>出</strong> runner 上的 <code>self.model</code>；<strong>下一跳</strong> 获取 model loader。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/worker/gpu_model_runner.py</code><span class="call-source-label">所属类</span><code>GPUModelRunner</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/worker/gpu_model_runner.py#L4747" target="_blank" rel="noopener">查看源码 L4747 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">31</div>
+            <div class="call-mode-cell"><span class="mode sync">SYNC</span></div>
+            <div class="call-route"><span class="caller"><code>GPUModelRunner</code></span><span class="call-arrow">→</span><span class="callee"><code>get_model_loader(load_config)</code></span></div>
+            <div class="call-note"><strong>入</strong> <code>load_format</code>；<strong>出</strong> Default/GGUF/BnB/Tensorizer loader；<strong>未知格式</strong> ValueError。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/model_executor/model_loader/__init__.py</code><span class="call-source-label">所属类</span><code>无（模块函数 get_model_loader）</code><a href="file:///opt/work/codes/github/vllm/vllm/model_executor/model_loader/__init__.py#L120" target="_blank" rel="noopener">查看源码 L120 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">32</div>
+            <div class="call-mode-cell"><span class="mode sync">SYNC</span></div>
+            <div class="call-route"><span class="caller"><code>GPUModelRunner</code></span><span class="call-arrow">→</span><span class="callee"><code>BaseModelLoader.load_model</code></span></div>
+            <div class="call-note"><strong>入</strong> VllmConfig、ModelConfig、target device、dtype；<strong>出</strong> eval 模式模型；<strong>下一跳</strong> 模型实例化。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/model_executor/model_loader/base_loader.py</code><span class="call-source-label">所属类</span><code>BaseModelLoader</code><a href="file:///opt/work/codes/github/vllm/vllm/model_executor/model_loader/base_loader.py#L43" target="_blank" rel="noopener">查看源码 L43 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">33</div>
+            <div class="call-mode-cell"><span class="mode sync">SYNC</span></div>
+            <div class="call-route"><span class="caller"><code>BaseModelLoader</code></span><span class="call-arrow">→</span><span class="callee"><code>initialize_model(...)</code></span></div>
+            <div class="call-note"><strong>入</strong> VllmConfig、model class/prefix；<strong>出</strong> 未加载权重模型；<strong>下一跳</strong> <code>load_weights</code>。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/model_executor/model_loader/utils.py</code><span class="call-source-label">所属类</span><code>无（模块函数 initialize_model）</code><a href="file:///opt/work/codes/github/vllm/vllm/model_executor/model_loader/utils.py#L36" target="_blank" rel="noopener">查看源码 L36 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">34</div>
+            <div class="call-mode-cell"><span class="mode sync">SYNC I/O</span></div>
+            <div class="call-route"><span class="caller"><code>BaseModelLoader</code></span><span class="call-arrow">→</span><span class="callee"><code>DefaultModelLoader.load_weights</code></span></div>
+            <div class="call-note"><strong>入</strong> 模型与 checkpoint；<strong>出</strong> 权重写入参数；<strong>严格检查</strong> 非量化模型遗漏权重会抛错。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/model_executor/model_loader/default_loader.py</code><span class="call-source-label">所属类</span><code>DefaultModelLoader</code><a href="file:///opt/work/codes/github/vllm/vllm/model_executor/model_loader/default_loader.py#L368" target="_blank" rel="noopener">查看源码 L368 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">35</div>
+            <div class="call-mode-cell"><span class="mode sync">SYNC ITER</span></div>
+            <div class="call-route"><span class="caller"><code>DefaultModelLoader</code></span><span class="call-arrow">→</span><span class="callee"><code>model.load_weights(iterator)</code></span></div>
+            <div class="call-note"><strong>入</strong> safetensors/权重迭代器；<strong>出</strong> 已加载参数名集合；<strong>下一跳</strong> 权重后处理。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/model_executor/model_loader/default_loader.py</code><span class="call-source-label">所属类</span><code>DefaultModelLoader；具体模型类由架构决定</code><a href="file:///opt/work/codes/github/vllm/vllm/model_executor/model_loader/default_loader.py#L381" target="_blank" rel="noopener">查看源码 L381 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">36</div>
+            <div class="call-mode-cell"><span class="mode sync">SYNC</span></div>
+            <div class="call-route"><span class="caller"><code>BaseModelLoader</code></span><span class="call-arrow">→</span><span class="callee"><code>process_weights_after_loading</code></span></div>
+            <div class="call-note"><strong>入</strong> model、ModelConfig、target device；<strong>出</strong> 量化/Attention 权重已转换；<strong>下一跳</strong> 返回模型。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/model_executor/model_loader/utils.py</code><span class="call-source-label">所属类</span><code>无（模块函数 process_weights_after_loading）</code><a href="file:///opt/work/codes/github/vllm/vllm/model_executor/model_loader/utils.py#L95" target="_blank" rel="noopener">查看源码 L95 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">37</div>
+            <div class="call-mode-cell"><span class="mode sync">SYNC RETURN</span></div>
+            <div class="call-route"><span class="caller"><code>BaseModelLoader</code></span><span class="call-arrow">→</span><span class="callee"><code>GPUModelRunner.load_model</code></span></div>
+            <div class="call-note"><strong>出</strong> <code>model.eval()</code> 返回并赋给 runner；<strong>显存</strong> 记录 model memory；<strong>下一跳</strong> KV cache 初始化。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/model_executor/model_loader/base_loader.py</code><span class="call-source-label">所属类</span><code>BaseModelLoader</code><a href="file:///opt/work/codes/github/vllm/vllm/model_executor/model_loader/base_loader.py#L83" target="_blank" rel="noopener">查看源码 L83 ↗</a></div>
+          </div>
+
+          <div class="call-phase">
+            <div class="call-phase-letter">F</div>
+            <div class="call-phase-copy"><strong>KV Cache、warmup 与 ready 回传</strong><span>EngineCore 等待 worker 内存 profile 与 KV 分配，再把最终运行参数同步给前端。</span></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">38</div>
+            <div class="call-mode-cell"><span class="mode sync">SYNC</span></div>
+            <div class="call-route"><span class="caller"><code>EngineCore.__init__</code></span><span class="call-arrow">→</span><span class="callee"><code>_initialize_kv_caches</code></span></div>
+            <div class="call-note"><strong>入</strong> VllmConfig、Executor；<strong>出</strong> scheduler KVCacheConfig；<strong>下一跳</strong> 收集 KV specs。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/engine/core.py</code><span class="call-source-label">所属类</span><code>EngineCore</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/engine/core.py#L231" target="_blank" rel="noopener">查看源码 L231 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">39</div>
+            <div class="call-mode-cell"><span class="mode rpc">RPC WAIT</span></div>
+            <div class="call-route"><span class="caller"><code>Executor</code></span><span class="call-arrow">→</span><span class="callee"><code>collective_rpc("get_kv_cache_spec")</code></span></div>
+            <div class="call-note"><strong>入</strong> 无额外参数；<strong>出</strong> 每 worker 的 KV spec；<strong>等待</strong> 所有 worker 响应。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/executor/abstract.py</code><span class="call-source-label">所属类</span><code>Executor</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/executor/abstract.py#L149" target="_blank" rel="noopener">查看源码 L149 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">40</div>
+            <div class="call-mode-cell"><span class="mode rpc">RPC WAIT</span></div>
+            <div class="call-route"><span class="caller"><code>Executor</code></span><span class="call-arrow">→</span><span class="callee"><code>collective_rpc("determine_available_memory")</code></span></div>
+            <div class="call-note"><strong>入</strong> 当前模型与 cache 配置；<strong>出</strong> 每 worker 可用 KV 字节；<strong>下一跳</strong> 计算 block 配置。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/executor/abstract.py</code><span class="call-source-label">所属类</span><code>Executor</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/executor/abstract.py#L146" target="_blank" rel="noopener">查看源码 L146 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">41</div>
+            <div class="call-mode-cell"><span class="mode sync">SYNC</span></div>
+            <div class="call-route"><span class="caller"><code>_initialize_kv_caches</code></span><span class="call-arrow">→</span><span class="callee"><code>get_kv_cache_configs(...)</code></span></div>
+            <div class="call-note"><strong>入</strong> specs、available memory、VllmConfig；<strong>出</strong> KV group 与 block 数；<strong>可能</strong> auto-fit 缩小 <code>max_model_len</code>。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/core/kv_cache_utils.py</code><span class="call-source-label">所属类</span><code>无（模块函数 get_kv_cache_configs）</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/core/kv_cache_utils.py#L1508" target="_blank" rel="noopener">查看源码 L1508 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">42</div>
+            <div class="call-mode-cell"><span class="mode rpc">RPC WAIT</span></div>
+            <div class="call-route"><span class="caller"><code>Executor</code></span><span class="call-arrow">→</span><span class="callee"><code>collective_rpc("initialize_from_config")</code></span></div>
+            <div class="call-note"><strong>入</strong> 每 worker KVCacheConfig；<strong>出</strong> 全部 worker 初始化完成；<strong>下一跳</strong> warmup / compile。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/executor/abstract.py</code><span class="call-source-label">所属类</span><code>Executor</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/executor/abstract.py#L118" target="_blank" rel="noopener">查看源码 L118 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">43</div>
+            <div class="call-mode-cell"><span class="mode sync">SYNC</span></div>
+            <div class="call-route"><span class="caller"><code>GPUWorker</code></span><span class="call-arrow">→</span><span class="callee"><code>initialize_from_config</code></span></div>
+            <div class="call-note"><strong>入</strong> KVCacheConfig；<strong>出</strong> connector 初始化、KV tensor 分配；<strong>下一跳</strong> <code>initialize_kv_cache</code>。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/worker/gpu_worker.py</code><span class="call-source-label">所属类</span><code>Worker</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/worker/gpu_worker.py#L519" target="_blank" rel="noopener">查看源码 L519 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">44</div>
+            <div class="call-mode-cell"><span class="mode sync">SYNC</span></div>
+            <div class="call-route"><span class="caller"><code>GPUWorker</code></span><span class="call-arrow">→</span><span class="callee"><code>GPUModelRunner.initialize_kv_cache</code></span></div>
+            <div class="call-note"><strong>入</strong> KVCacheConfig；<strong>出</strong> KV cache 张量与元数据；<strong>下一跳</strong> compile/warmup。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/worker/gpu_model_runner.py</code><span class="call-source-label">所属类</span><code>GPUModelRunner</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/worker/gpu_model_runner.py#L6738" target="_blank" rel="noopener">查看源码 L6738 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">45</div>
+            <div class="call-mode-cell"><span class="mode rpc">RPC WAIT</span></div>
+            <div class="call-route"><span class="caller"><code>Executor.initialize_from_config</code></span><span class="call-arrow">→</span><span class="callee"><code>collective_rpc("compile_or_warm_up_model")</code></span></div>
+            <div class="call-note"><strong>入</strong> 编译配置；<strong>出</strong> compilation times；<strong>执行</strong> kernel warmup、torch compile、cudagraph capture。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/worker/gpu_worker.py</code><span class="call-source-label">所属类</span><code>Worker</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/worker/gpu_worker.py#L554" target="_blank" rel="noopener">查看源码 L554 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">46</div>
+            <div class="call-mode-cell"><span class="mode sync">SYNC</span></div>
+            <div class="call-route"><span class="caller"><code>EngineCore.__init__</code></span><span class="call-arrow">→</span><span class="callee"><code>Scheduler(...)</code></span></div>
+            <div class="call-note"><strong>入</strong> KVCacheConfig、structured output manager、block size；<strong>出</strong> scheduler；<strong>下一跳</strong> EngineCore 完成构造。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/engine/core.py</code><span class="call-source-label">所属类</span><code>EngineCore</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/engine/core.py#L145" target="_blank" rel="noopener">查看源码 L145 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">47</div>
+            <div class="call-mode-cell"><span class="mode thread">THREAD</span></div>
+            <div class="call-route"><span class="caller"><code>EngineCoreProc</code></span><span class="call-arrow">→</span><span class="callee"><code>process_input_sockets</code> / <code>process_output_sockets</code></span></div>
+            <div class="call-note"><strong>入</strong> input/output addresses、engine identity；<strong>出</strong> ZMQ I/O 线程；<strong>下一跳</strong> ready payload。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/engine/core.py</code><span class="call-source-label">所属类</span><code>EngineCoreProc</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/engine/core.py#L885" target="_blank" rel="noopener">查看源码 L885 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">48</div>
+            <div class="call-mode-cell"><span class="mode thread">THREAD SEND</span></div>
+            <div class="call-route"><span class="caller"><code>process_input_sockets</code></span><span class="call-arrow">→</span><span class="callee"><code>EngineCoreReadyResponse</code> → frontend</span></div>
+            <div class="call-note"><strong>入</strong> max_model_len、num_gpu_blocks、dp_stats_address；<strong>出</strong> ready event 与 ZMQ payload；<strong>下一跳</strong> 前端解除等待。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/engine/core.py</code><span class="call-source-label">所属类</span><code>EngineCoreProc</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/engine/core.py#L1368" target="_blank" rel="noopener">查看源码 L1368 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">49</div>
+            <div class="call-mode-cell"><span class="mode wait">BLOCKING WAIT</span></div>
+            <div class="call-route"><span class="caller"><code>MPClient.__init__</code></span><span class="call-arrow">→</span><span class="callee"><code>sync_input_socket.poll(...)</code></span></div>
+            <div class="call-note"><strong>入</strong> <code>VLLM_ENGINE_READY_TIMEOUT_S</code>；<strong>出</strong> 每个 engine identity 的 payload；<strong>超时</strong> TimeoutError。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/engine/core_client.py</code><span class="call-source-label">所属类</span><code>MPClient</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/engine/core_client.py#L577" target="_blank" rel="noopener">查看源码 L577 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">50</div>
+            <div class="call-mode-cell"><span class="mode sync">SYNC</span></div>
+            <div class="call-route"><span class="caller"><code>MPClient</code></span><span class="call-arrow">→</span><span class="callee"><code>_apply_ready_response(payload)</code></span></div>
+            <div class="call-note"><strong>入</strong> EngineCoreReadyResponse；<strong>出</strong> 更新 max_model_len、num_gpu_blocks、stats address；<strong>下一跳</strong> 客户端完成构造。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/engine/core_client.py</code><span class="call-source-label">所属类</span><code>MPClient</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/engine/core_client.py#L667" target="_blank" rel="noopener">查看源码 L667 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">51</div>
+            <div class="call-mode-cell"><span class="mode task">ASYNC TASK</span></div>
+            <div class="call-route"><span class="caller"><code>AsyncMPClient</code></span><span class="call-arrow">→</span><span class="callee"><code>_ensure_output_queue_task()</code></span></div>
+            <div class="call-note"><strong>入</strong> output socket、decoder；<strong>出</strong> 持续运行的 output queue task；<strong>下一跳</strong> 引擎输出可被 AsyncLLM 消费。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/engine/core_client.py</code><span class="call-source-label">所属类</span><code>AsyncMPClient</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/engine/core_client.py#L921" target="_blank" rel="noopener">查看源码 L921 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">52</div>
+            <div class="call-mode-cell"><span class="mode task">ASYNC TASK</span></div>
+            <div class="call-route"><span class="caller"><code>AsyncLLM.__init__</code></span><span class="call-arrow">→</span><span class="callee"><code>_run_output_handler()</code></span></div>
+            <div class="call-note"><strong>入</strong> engine core 与 output processor；<strong>出</strong> 后台输出消费 task；<strong>下一跳</strong> 请求输出可转为 API 流。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/engine/async_llm.py</code><span class="call-source-label">所属类</span><code>AsyncLLM</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/engine/async_llm.py#L634" target="_blank" rel="noopener">查看源码 L634 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">53</div>
+            <div class="call-mode-cell"><span class="mode async">ASYNC AWAIT</span></div>
+            <div class="call-route"><span class="caller"><code>build_async_engine_client</code></span><span class="call-arrow">→</span><span class="callee"><code>await async_llm.reset_mm_cache()</code></span></div>
+            <div class="call-note"><strong>入</strong> EngineClient；<strong>出</strong> 多模态缓存已清理；<strong>下一跳</strong> async context 产出 engine client。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/engine/async_llm.py</code><span class="call-source-label">所属类</span><code>AsyncLLM</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/engine/async_llm.py#L885" target="_blank" rel="noopener">查看源码 L885 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">54</div>
+            <div class="call-mode-cell"><span class="mode async">ASYNC CM YIELD</span></div>
+            <div class="call-route"><span class="caller"><code>build_async_engine_client</code></span><span class="call-arrow">→</span><span class="callee"><code>run_server_worker</code></span></div>
+            <div class="call-note"><strong>出</strong> 已就绪 <code>AsyncLLM</code>；<strong>下一跳</strong> <code>build_and_serve</code> 构建 FastAPI。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/entrypoints/openai/api_server.py</code><span class="call-source-label">所属类</span><code>无（async context manager build_async_engine_client）</code><a href="file:///opt/work/codes/github/vllm/vllm/entrypoints/openai/api_server.py#L100" target="_blank" rel="noopener">查看源码 L100 ↗</a></div>
+          </div>
+
+          <div class="call-phase">
+            <div class="call-phase-letter">G</div>
+            <div class="call-phase-copy"><strong>FastAPI 构建、Uvicorn 监听与请求入口</strong><span>只有到这里，已经 bind 的 socket 才进入 accept 循环并真正对外服务。</span></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">55</div>
+            <div class="call-mode-cell"><span class="mode async">ASYNC AWAIT</span></div>
+            <div class="call-route"><span class="caller"><code>run_server_worker</code></span><span class="call-arrow">→</span><span class="callee"><code>build_and_serve(...)</code></span></div>
+            <div class="call-note"><strong>入</strong> engine client、listen address、sock、args；<strong>出</strong> server 关闭 task；<strong>下一跳</strong> 查询 supported tasks。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/entrypoints/openai/api_server.py</code><span class="call-source-label">所属类</span><code>无（async function build_and_serve）</code><a href="file:///opt/work/codes/github/vllm/vllm/entrypoints/openai/api_server.py#L578" target="_blank" rel="noopener">查看源码 L578 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">56</div>
+            <div class="call-mode-cell"><span class="mode async">ASYNC AWAIT RPC</span></div>
+            <div class="call-route"><span class="caller"><code>build_and_serve</code></span><span class="call-arrow">→</span><span class="callee"><code>await engine_client.get_supported_tasks()</code></span></div>
+            <div class="call-note"><strong>入</strong> EngineClient；<strong>出</strong> generate/render/pooling 等任务元组；<strong>下一跳</strong> 注册路由。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/engine/async_llm.py</code><span class="call-source-label">所属类</span><code>AsyncLLM</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/engine/async_llm.py#L275" target="_blank" rel="noopener">查看源码 L275 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">57</div>
+            <div class="call-mode-cell"><span class="mode sync">SYNC</span></div>
+            <div class="call-route"><span class="caller"><code>build_and_serve</code></span><span class="call-arrow">→</span><span class="callee"><code>build_app(...)</code></span></div>
+            <div class="call-note"><strong>入</strong> args、supported tasks、model config；<strong>出</strong> FastAPI app；<strong>下一跳</strong> 注册 routers。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/entrypoints/openai/api_server.py</code><span class="call-source-label">所属类</span><code>无（模块函数 build_app）</code><a href="file:///opt/work/codes/github/vllm/vllm/entrypoints/openai/api_server.py#L157" target="_blank" rel="noopener">查看源码 L157 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">58</div>
+            <div class="call-mode-cell"><span class="mode sync">SYNC</span></div>
+            <div class="call-route"><span class="caller"><code>build_app</code></span><span class="call-arrow">→</span><span class="callee">routers / middleware / exception handlers</span></div>
+            <div class="call-note"><strong>入</strong> supported tasks 与 args；<strong>出</strong> 可调用 app；<strong>下一跳</strong> <code>init_app_state</code>。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/entrypoints/openai/api_server.py</code><span class="call-source-label">所属类</span><code>无（模块函数 build_app）</code><a href="file:///opt/work/codes/github/vllm/vllm/entrypoints/openai/api_server.py#L182" target="_blank" rel="noopener">查看源码 L182 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">59</div>
+            <div class="call-mode-cell"><span class="mode async">ASYNC AWAIT</span></div>
+            <div class="call-route"><span class="caller"><code>build_and_serve</code></span><span class="call-arrow">→</span><span class="callee"><code>init_app_state(...)</code></span></div>
+            <div class="call-note"><strong>入</strong> engine client、app.state、args；<strong>出</strong> serving models/render/tokenization handlers；<strong>下一跳</strong> 交给 Uvicorn。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/entrypoints/openai/api_server.py</code><span class="call-source-label">所属类</span><code>无（async function init_app_state）</code><a href="file:///opt/work/codes/github/vllm/vllm/entrypoints/openai/api_server.py#L317" target="_blank" rel="noopener">查看源码 L317 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">60</div>
+            <div class="call-mode-cell"><span class="mode async">ASYNC AWAIT</span></div>
+            <div class="call-route"><span class="caller"><code>build_and_serve</code></span><span class="call-arrow">→</span><span class="callee"><code>serve_http(app, sock=...)</code></span></div>
+            <div class="call-note"><strong>入</strong> FastAPI app、已 bind sock、TLS/HTTP 参数；<strong>出</strong> shutdown coroutine；<strong>下一跳</strong> Uvicorn 配置。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/entrypoints/launcher.py</code><span class="call-source-label">所属类</span><code>无（async function serve_http）</code><a href="file:///opt/work/codes/github/vllm/vllm/entrypoints/launcher.py#L26" target="_blank" rel="noopener">查看源码 L26 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">61</div>
+            <div class="call-mode-cell"><span class="mode sync">SYNC</span></div>
+            <div class="call-route"><span class="caller"><code>serve_http</code></span><span class="call-arrow">→</span><span class="callee"><code>uvicorn.Config.load()</code> / <code>uvicorn.Server</code></span></div>
+            <div class="call-note"><strong>入</strong> app、log/TLS/H11 设置；<strong>出</strong> Uvicorn Server；<strong>下一跳</strong> 创建后台任务。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/entrypoints/launcher.py</code><span class="call-source-label">所属类</span><code>uvicorn.Config / uvicorn.Server</code><a href="file:///opt/work/codes/github/vllm/vllm/entrypoints/launcher.py#L71" target="_blank" rel="noopener">查看源码 L71 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">62</div>
+            <div class="call-mode-cell"><span class="mode task">ASYNC TASK</span></div>
+            <div class="call-route"><span class="caller"><code>serve_http</code></span><span class="call-arrow">→</span><span class="callee"><code>watchdog_loop(server, engine_client)</code></span></div>
+            <div class="call-note"><strong>入</strong> server、engine；<strong>出</strong> engine 故障监控 task；<strong>周期</strong> 5 秒检查 errored / is_running。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/entrypoints/launcher.py</code><span class="call-source-label">所属类</span><code>无（async function watchdog_loop）</code><a href="file:///opt/work/codes/github/vllm/vllm/entrypoints/launcher.py#L144" target="_blank" rel="noopener">查看源码 L144 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">63</div>
+            <div class="call-mode-cell"><span class="mode task">ASYNC TASK</span></div>
+            <div class="call-route"><span class="caller"><code>serve_http</code></span><span class="call-arrow">→</span><span class="callee"><code>server.serve(sockets=[sock])</code></span></div>
+            <div class="call-note"><strong>入</strong> 已 bind socket；<strong>出</strong> server task；<strong>下一跳</strong> Uvicorn accept loop 与 lifespan。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/entrypoints/launcher.py</code><span class="call-source-label">所属类</span><code>uvicorn.Server</code><a href="file:///opt/work/codes/github/vllm/vllm/entrypoints/launcher.py#L82" target="_blank" rel="noopener">查看源码 L82 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">64</div>
+            <div class="call-mode-cell"><span class="mode async">ASYNC SERVE</span></div>
+            <div class="call-route"><span class="caller"><code>serve_http</code></span><span class="call-arrow">→</span><span class="callee"><code>await server_task</code></span></div>
+            <div class="call-note"><strong>入</strong> Uvicorn server task；<strong>出</strong> server 正常/异常退出；<strong>下一跳</strong> 关闭 engine、watchdog 与 socket。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/entrypoints/launcher.py</code><span class="call-source-label">所属类</span><code>无（async function serve_http）</code><a href="file:///opt/work/codes/github/vllm/vllm/entrypoints/launcher.py#L125" target="_blank" rel="noopener">查看源码 L125 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">65</div>
+            <div class="call-mode-cell"><span class="mode async">ASYNC CONTEXT</span></div>
+            <div class="call-route"><span class="caller">Uvicorn</span><span class="call-arrow">→</span><span class="callee">FastAPI <code>lifespan(app)</code></span></div>
+            <div class="call-note"><strong>入</strong> app.state；<strong>出</strong> stats task 与 static GC heap；<strong>下一跳</strong> HTTP routes 可处理请求。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/entrypoints/openai/server_utils.py</code><span class="call-source-label">所属类</span><code>无（FastAPI lifespan context manager）</code><a href="file:///opt/work/codes/github/vllm/vllm/entrypoints/openai/server_utils.py#L447" target="_blank" rel="noopener">查看源码 L447 ↗</a></div>
+          </div>
+          <div class="call-row">
+            <div class="call-step">66</div>
+            <div class="call-mode-cell"><span class="mode async">ASYNC HTTP</span></div>
+            <div class="call-route"><span class="caller">HTTP client</span><span class="call-arrow">→</span><span class="callee">FastAPI handler → <code>AsyncLLM.add_request</code></span></div>
+            <div class="call-note"><strong>入</strong> OpenAI request；<strong>出</strong> JSON 或 streaming response；<strong>下一跳</strong> EngineCore input socket → scheduler → worker。</div>
+            <div class="call-source"><span class="call-source-label">绝对路径</span><code>/opt/work/codes/github/vllm/vllm/v1/engine/async_llm.py</code><span class="call-source-label">所属类</span><code>AsyncLLM</code><a href="file:///opt/work/codes/github/vllm/vllm/v1/engine/async_llm.py#L282" target="_blank" rel="noopener">查看源码 L282 ↗</a></div>
+          </div>
+        </div>
+
+        <div class="call-branch-note">
+          <strong>读图方式：</strong>“SYNC”表示当前调用栈等待被调函数返回；
+          “ASYNC/AWAIT”表示协程在事件循环中等待；“TASK/THREAD”表示启动后台执行体后调用方继续；
+          “PROCESS”表示新建进程；“RPC/WAIT”表示跨进程等待响应。即便外层是 async 函数，
+          <code>AsyncLLM.from_vllm_config</code> 和 <code>MPClient.__init__</code> 仍是会阻塞事件循环的同步构造函数。
+        </div>
+
+        <div class="chapter-nav">
+          <a href="#overview">继续阅读：范围与全景 →</a>
+          <a href="#chain-appendix">完整源码索引 →</a>
+        </div>
+      </section>
+
+      <section class="overview" id="overview" aria-labelledby="overview-title">
+        <div class="eyebrow">
+          <span class="phase-chip">SOURCE WALKTHROUGH</span>
+          <span class="commit-chip">101584af0a8ddf67165fc89cae77ed560fb0096b</span>
+        </div>
+        <h1 id="overview-title">vLLM 从 <code>vllm serve</code> 到 <span class="nowrap">HTTP 监听</span>，<br class="title-break">经历了什么？</h1>
+        <p class="lead">
+          这份文档沿当前工作树的真实代码追踪 OpenAI-compatible HTTP 服务的启动过程。
+          主路径以单 API server、CUDA、单模型实例为基线；多 GPU、多 API server、Data Parallel、
+          Ray、headless 和回退路径在同一调用框架内单独标注。
+        </p>
+
+        <div class="scope-note">
+          <strong>关键结论</strong>：服务端口在模型加载前就已经 <code>bind</code>，但 Uvicorn 要等
+          <code>AsyncLLM</code>、后台 <code>EngineCore</code>、Executor/Worker、模型权重与 KV Cache 都完成后才开始
+          <code>server.serve(sockets=[sock])</code>。因此“端口已绑定”不等于“模型已可用”。
+        </div>
+
+        <ol class="pipeline" aria-label="启动阶段总览">
+          <li>
+            <span class="step-kicker">01 · CLI</span>
+            <strong>解析命令并选择进程拓扑</strong>
+            <small><code>main</code> → <code>ServeSubcommand.cmd</code></small>
+          </li>
+          <li>
+            <span class="step-kicker">02 · SOCKET</span>
+            <strong>提前绑定监听地址</strong>
+            <small><code>setup_server</code> 返回已 bind 的 socket</small>
+          </li>
+          <li>
+            <span class="step-kicker">03 · CONFIG</span>
+            <strong>构造 VllmConfig</strong>
+            <small>模型配置、并行配置、Executor 类型</small>
+          </li>
+          <li>
+            <span class="step-kicker">04 · ENGINE</span>
+            <strong>启动 EngineCore 和 Worker</strong>
+            <small>进程/线程、分布式环境、模型 runner</small>
+          </li>
+          <li>
+            <span class="step-kicker">05 · LOAD</span>
+            <strong>加载权重并准备 KV Cache</strong>
+            <small>模型、内存 profile、warmup、cudagraph</small>
+          </li>
+          <li>
+            <span class="step-kicker">06 · SERVE</span>
+            <strong>构建 FastAPI 并交给 Uvicorn</strong>
+            <small><code>server.serve(sockets=[sock])</code></small>
+          </li>
+        </ol>
+
+        <h3>一次完整的启动时序</h3>
+        <div class="sequence-wrap" role="group" aria-label="服务启动关键事件时序图">
+          <div class="sequence">
+            <div class="seq-head">阶段</div>
+            <div class="seq-head">API / Host 进程</div>
+            <div class="seq-head">EngineCore 进程</div>
+            <div class="seq-head">Worker / GPU</div>
+            <div class="seq-head">HTTP 客户端</div>
+
+            <div class="seq-time">T1</div>
+            <div class="seq-cell"><span class="actor-label">API</span><span class="event">解析 CLI，确定单/多 API server</span></div>
+            <div class="seq-cell"><span class="event-idle">—</span></div>
+            <div class="seq-cell"><span class="event-idle">—</span></div>
+            <div class="seq-cell"><span class="event-idle">—</span></div>
+
+            <div class="seq-time">T2</div>
+            <div class="seq-cell"><span class="actor-label">API</span><span class="event">创建并 bind HTTP socket</span></div>
+            <div class="seq-cell"><span class="event-idle">—</span></div>
+            <div class="seq-cell"><span class="event-idle">—</span></div>
+            <div class="seq-cell"><span class="event-idle">尚未 accept</span></div>
+
+            <div class="seq-time">T3</div>
+            <div class="seq-cell"><span class="actor-label">API</span><span class="event">构造 AsyncLLM，创建 AsyncMPClient</span></div>
+            <div class="seq-cell"><span class="actor-label">CORE</span><span class="event process">spawn EngineCoreProc</span></div>
+            <div class="seq-cell"><span class="event-idle">—</span></div>
+            <div class="seq-cell"><span class="event-idle">—</span></div>
+
+            <div class="seq-time">T4</div>
+            <div class="seq-cell"><span class="actor-label">API</span><span class="event">等待 engine ready 消息</span></div>
+            <div class="seq-cell"><span class="actor-label">CORE</span><span class="event process">创建 Executor</span></div>
+            <div class="seq-cell"><span class="actor-label">WORKER</span><span class="event worker">初始化 device / model runner</span></div>
+            <div class="seq-cell"><span class="event-idle">—</span></div>
+
+            <div class="seq-time">T5</div>
+            <div class="seq-cell"><span class="actor-label">API</span><span class="event">同步 max_model_len / KV blocks</span></div>
+            <div class="seq-cell"><span class="actor-label">CORE</span><span class="event process">KV 预算、KV 分配、warmup</span></div>
+            <div class="seq-cell"><span class="actor-label">WORKER</span><span class="event worker">加载权重、初始化 KV、编译预热</span></div>
+            <div class="seq-cell"><span class="event-idle">—</span></div>
+
+            <div class="seq-time">T6</div>
+            <div class="seq-cell"><span class="actor-label">API</span><span class="event">构建 FastAPI app 与 state</span></div>
+            <div class="seq-cell"><span class="actor-label">CORE</span><span class="event process">进入 run_busy_loop</span></div>
+            <div class="seq-cell"><span class="actor-label">WORKER</span><span class="event worker">等待 scheduler RPC</span></div>
+            <div class="seq-cell"><span class="event-idle">连接待处理</span></div>
+
+            <div class="seq-time">T7</div>
+            <div class="seq-cell"><span class="actor-label">API</span><span class="event">Uvicorn serve 已 bind socket</span></div>
+            <div class="seq-cell"><span class="actor-label">CORE</span><span class="event process">处理请求队列</span></div>
+            <div class="seq-cell"><span class="actor-label">WORKER</span><span class="event worker">执行模型</span></div>
+            <div class="seq-cell"><span class="actor-label">HTTP</span><span class="event http">连接被 accept，API 可用</span></div>
+          </div>
+          <p class="sequence-caption">
+            时序图的重点是“ready”边界：Worker ready 是进程内部条件，EngineCore ready 是引擎级条件，
+            Uvicorn listen 则是 HTTP 对外可用条件。三者不是同一时点。
+          </p>
+        </div>
+
+        <div class="chapter-nav">
+          <span>阅读基线：<code>vllm serve &lt;model&gt;</code></span>
+          <a href="#cli-entry">从入口开始 →</a>
+        </div>
+      </section>
+
+      <section class="chapter" id="cli-entry" aria-labelledby="cli-entry-title">
+        <div class="eyebrow"><span class="phase-chip">01 / ENTRY</span><span>console script → argparse → dispatch</span></div>
+        <h2 id="cli-entry-title">命令行入口：<code>vllm</code> 如何找到 <code>serve</code></h2>
+
+        <dl class="contract">
+          <div><dt>作用</dt><dd>把安装时生成的 <code>vllm</code> 可执行入口接到 Python CLI，并让 <code>serve</code> 子命令注册自己的参数和 dispatch 函数。</dd></div>
+          <div><dt>关键入参</dt><dd><code>sys.argv</code>，例如 <code>["vllm", "serve", "Qwen/Qwen3-0.6B", "--port", "8000"]</code>。</dd></div>
+          <div><dt>内部处理</dt><dd>延迟导入各命令模块；调用 <code>cli_env_setup()</code>；构建 <code>FlexibleArgumentParser</code>；逐个子命令执行 <code>subparser_init()</code> 并写入 <code>dispatch_function</code>；解析、验证、分发。</dd></div>
+          <div><dt>返回 / 下一步</dt><dd><code>main()</code> 本身无返回值；最后调用 <code>args.dispatch_function(args)</code>，即进入 <code>ServeSubcommand.cmd</code>。</dd></div>
+        </dl>
+
+        <div class="source-line">
+          <a href="../pyproject.toml#L41-L42">pyproject.toml:41-42</a>
+          <a href="../vllm/entrypoints/cli/main.py#L16-L77">vllm/entrypoints/cli/main.py:16-77</a>
+          <a href="../vllm/entrypoints/utils.py#L153-L171">vllm/entrypoints/utils.py:153-171</a>
+        </div>
+
+        <div class="code-block">
+          <div class="code-head">
+            <span>vllm/entrypoints/cli/main.py</span>
+            <a href="../vllm/entrypoints/cli/main.py#L70-L75">L70-L75</a>
+          </div>
+          <pre><code><span class="code-line"><span class="ln">70</span><span class="lc">args = parser.parse_args()</span></span>
+<span class="code-line"><span class="ln">71</span><span class="lc"><span class="kw">if</span> args.subparser <span class="kw">in</span> cmds:</span></span>
+<span class="code-line"><span class="ln">72</span><span class="lc">    cmds[args.subparser].validate(args)</span></span>
+<span class="code-line"><span class="ln">73</span><span class="lc"></span></span>
+<span class="code-line"><span class="ln">74</span><span class="lc"><span class="kw">if</span> hasattr(args, <span class="str">"dispatch_function"</span>):</span></span>
+<span class="code-line"><span class="ln">75</span><span class="lc">    args.dispatch_function(args)</span></span></code></pre>
+        </div>
+
+        <h3>内部调用逻辑</h3>
+        <ul class="plain">
+          <li><code>cli_env_setup()</code> 在用户未显式指定时，把 <code>VLLM_WORKER_MULTIPROC_METHOD</code> 设为 <code>spawn</code>。这会影响后续 EngineCore 与 Worker 的 multiprocessing 上下文。</li>
+          <li>命令模块是延迟导入的，避免在只需要 <code>--help</code> 或版本号时提前触发重依赖。</li>
+          <li><code>ServeSubcommand.subparser_init()</code> 调用 <code>make_arg_parser()</code>，把 OpenAI 前端参数与 <code>AsyncEngineArgs</code> 参数合并到一个子命令解析器中。</li>
+          <li><code>validate(args)</code> 在分发前执行轻量检查，例如 chat template、auto tool choice 与 tool parser 的搭配。</li>
+        </ul>
+
+        <div class="callout warning">
+          <strong>错误边界</strong>
+          <p>参数解析错误、缺少互斥依赖、非法 chat template 会在创建 socket 和加载模型之前失败，尚未进入引擎启动阶段。</p>
+        </div>
+
+        <div class="chapter-nav">
+          <a href="#overview">← 全景</a>
+          <a href="#serve-routing">下一页：serve 路由 →</a>
+        </div>
+      </section>
+
+      <section class="chapter" id="serve-routing" aria-labelledby="serve-routing-title">
+        <div class="eyebrow"><span class="phase-chip">02 / ROUTING</span><span>single · multi-API · headless · gRPC</span></div>
+        <h2 id="serve-routing-title"><code>ServeSubcommand.cmd</code>：先决定启动拓扑</h2>
+
+        <dl class="contract">
+          <div><dt>作用</dt><dd>把 CLI 参数归一化为服务拓扑选择，决定跑一个 API server、多个 API server、headless engine，还是转去 gRPC。</dd></div>
+          <div><dt>关键入参</dt><dd><code>model_tag</code>、<code>headless</code>、<code>api_server_count</code>、<code>data_parallel_size</code>、external/hybrid LB 标志、<code>enable_elastic_ep</code>、<code>grpc</code>。</dd></div>
+          <div><dt>内部处理</dt><dd>位置参数覆盖 <code>--model</code>；处理 gRPC 与 headless；检测 external/hybrid LB 冲突；按 DP 规模推导 API server 数量；Elastic EP 强制不超过一个 API server；按数量分支。</dd></div>
+          <div><dt>返回 / 下一步</dt><dd>无返回值。单 API server 走 <code>uvloop.run(run_server(args))</code>；多 API server 走 <code>run_multi_api_server(args)</code>；headless 走 <code>run_headless(args)</code>。</dd></div>
+        </dl>
+
+        <div class="source-line">
+          <a href="../vllm/entrypoints/cli/serve.py#L37-L122">vllm/entrypoints/cli/serve.py:37-122</a>
+          <a href="../vllm/entrypoints/openai/cli_args.py#L317-L361">vllm/entrypoints/openai/cli_args.py:317-361</a>
+          <a href="../vllm/entrypoints/openai/cli_args.py#L364-L377">vllm/entrypoints/openai/cli_args.py:364-377</a>
+        </div>
+
+        <div class="code-block">
+          <div class="code-head">
+            <span>vllm/entrypoints/cli/serve.py</span>
+            <a href="../vllm/entrypoints/cli/serve.py#L115-L122">L115-L122</a>
+          </div>
+          <pre><code><span class="code-line"><span class="ln">115</span><span class="lc"><span class="kw">if</span> args.api_server_count &lt; 1:</span></span>
+<span class="code-line"><span class="ln">116</span><span class="lc">    run_headless(args)</span></span>
+<span class="code-line"><span class="ln">117</span><span class="lc"><span class="kw">elif</span> args.api_server_count &gt; 1:</span></span>
+<span class="code-line"><span class="ln">118</span><span class="lc">    run_multi_api_server(args)</span></span>
+<span class="code-line"><span class="ln">119</span><span class="lc"><span class="kw">else</span>:</span></span>
+<span class="code-line"><span class="ln">120</span><span class="lc">    <span class="cm"># Single API server (this process).</span></span></span>
+<span class="code-line"><span class="ln">121</span><span class="lc">    args.api_server_count = <span class="kw">None</span></span></span>
+<span class="code-line"><span class="ln">122</span><span class="lc">    uvloop.run(run_server(args))</span></span></code></pre>
+        </div>
+
+        <h3>API server 数量的默认规则</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>条件</th><th>默认 / 行为</th><th>原因</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>未指定 count，external DP LB</td><td>1</td><td>外部负载均衡器负责分发。</td></tr>
+              <tr><td>未指定 count，hybrid DP LB</td><td><code>data_parallel_size_local or 1</code></td><td>每节点本地做 DP 负载均衡。</td></tr>
+              <tr><td>未指定 count，internal DP LB</td><td><code>data_parallel_size</code></td><td>每个 DP rank 对应一个前端。</td></tr>
+              <tr><td><code>enable_elastic_ep=True</code> 且 count &gt; 1</td><td>降为 1 并 warning</td><td>当前 Elastic EP 限制最多一个 API server。</td></tr>
+              <tr><td><code>--headless</code></td><td>count 强制为 0，走 engine-only</td><td>不启动 HTTP 前端。</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="callout">
+          <strong>主路径选择</strong>
+          <p>普通单机服务没有 DP 时，<code>api_server_count</code> 最终为 1，随后被重置为 <code>None</code>，由当前进程直接执行异步 <code>run_server</code>。本文后续默认沿这条路径展开。</p>
+        </div>
+
+        <div class="chapter-nav">
+          <a href="#cli-entry">← 入口</a>
+          <a href="#bind-socket">下一页：预绑定 socket →</a>
+        </div>
+      </section>
+
+      <section class="chapter" id="bind-socket" aria-labelledby="bind-socket-title">
+        <div class="eyebrow"><span class="phase-chip">03 / SOCKET</span><span>bind before engine</span></div>
+        <h2 id="bind-socket-title"><code>setup_server</code>：先占住地址，再加载模型</h2>
+
+        <dl class="contract">
+          <div><dt>作用</dt><dd>验证前端参数、创建 TCP/Unix socket 并提前 bind，避免 Ray 等后端初始化时发生端口竞争，同时准备监听地址与终止信号处理。</dd></div>
+          <div><dt>关键入参</dt><dd><code>args.uds</code>、<code>args.host</code>、<code>args.port</code>、SSL 字段、tool/reasoning parser plugin 字段。</dd></div>
+          <div><dt>内部处理</dt><dd>记录版本与模型；导入 parser 插件；校验 parser；按 IPv4/IPv6 创建 socket，设置 <code>SO_REUSEADDR</code> 与 <code>SO_REUSEPORT</code> 后调用 <code>bind</code>；设置 ulimit；安装 SIGTERM handler。</dd></div>
+          <div><dt>返回 / 下一步</dt><dd>返回 <code>(listen_address, sock)</code>。此时 socket 已 bind，但尚未开始 Uvicorn accept 循环；下一步进入 <code>run_server_worker</code> 并先构建引擎。</dd></div>
+        </dl>
+
+        <div class="source-line">
+          <a href="../vllm/entrypoints/openai/api_server.py#L496-L575">vllm/entrypoints/openai/api_server.py:496-575</a>
+        </div>
+
+        <div class="code-block">
+          <div class="code-head">
+            <span>vllm/entrypoints/openai/api_server.py</span>
+            <a href="../vllm/entrypoints/openai/api_server.py#L549-L575">L549-L575</a>
+          </div>
+          <pre><code><span class="code-line"><span class="ln">549</span><span class="lc"><span class="cm"># workaround to make sure that we bind the port before the engine is set up.</span></span></span>
+<span class="code-line"><span class="ln">550</span><span class="lc"><span class="cm"># This avoids race conditions with ray.</span></span></span>
+<span class="code-line"><span class="ln">551</span><span class="lc"><span class="cm"># see https://github.com/vllm-project/vllm/issues/8204</span></span></span>
+<span class="code-line"><span class="ln">552</span><span class="lc"><span class="kw">if</span> args.uds:</span></span>
+<span class="code-line"><span class="ln">553</span><span class="lc">    sock = create_server_unix_socket(args.uds)</span></span>
+<span class="code-line"><span class="ln">554</span><span class="lc"><span class="kw">else</span>:</span></span>
+<span class="code-line"><span class="ln">555</span><span class="lc">    sock_addr = (args.host <span class="kw">or</span> <span class="str">""</span>, args.port)</span></span>
+<span class="code-line"><span class="ln">556</span><span class="lc">    sock = create_server_socket(sock_addr)</span></span></code></pre>
+        </div>
+
+        <h3>内部处理与衔接</h3>
+        <div class="two-col">
+          <div>
+            <h4>绑定阶段</h4>
+            <p><code>create_server_socket</code> 根据地址判断 <code>AF_INET</code> 或 <code>AF_INET6</code>，设置两个复用选项后 <code>bind</code>。这保证端口在耗时的模型加载之前已被当前进程占有。</p>
+          </div>
+          <div>
+            <h4>监听阶段</h4>
+            <p>真正开始接收连接发生在后续 <code>serve_http</code>：<code>uvicorn.Server.serve(sockets=[sock])</code> 使用这个已绑定 socket 建立 HTTP accept 循环。</p>
+          </div>
+        </div>
+
+        <div class="callout warning">
+          <strong>异常路径</strong>
+          <p>地址已在用时，<code>bind</code> 抛 <code>OSError</code>；parser 插件非法或参数校验失败时，在进入引擎前直接失败。SIGTERM handler 在初始化期间会把终止转换为 <code>KeyboardInterrupt</code>。</p>
+        </div>
+
+        <div class="chapter-nav">
+          <a href="#serve-routing">← 路由</a>
+          <a href="#engine-config">下一页：构造引擎配置 →</a>
+        </div>
+      </section>
+
+      <section class="chapter" id="engine-config" aria-labelledby="engine-config-title">
+        <div class="eyebrow"><span class="phase-chip">04 / CONFIG</span><span>CLI Namespace → VllmConfig</span></div>
+        <h2 id="engine-config-title"><code>AsyncEngineArgs</code> 与 <code>VllmConfig</code>：模型配置何时读取</h2>
+
+        <dl class="contract">
+          <div><dt>作用</dt><dd>把前端 CLI namespace 转换为结构化引擎参数，再创建模型、缓存、并行、设备等子配置，供 EngineCore、Executor、Worker 共用。</dd></div>
+          <div><dt>关键入参</dt><dd>解析后的命令参数、<code>UsageContext.OPENAI_API_SERVER</code>，以及多 API server 场景下的 <code>client_config</code>。</dd></div>
+          <div><dt>内部处理</dt><dd><code>AsyncEngineArgs.from_cli_args()</code> 逐字段拷贝；<code>create_engine_config()</code> 创建 <code>DeviceConfig</code>、<code>ModelConfig</code>、<code>CacheConfig</code>、<code>ParallelConfig</code> 等；<code>ParallelConfig</code> 决定默认 Executor 后端。</dd></div>
+          <div><dt>返回 / 下一步</dt><dd>返回一个 <code>VllmConfig</code>。配置阶段会读取模型/tokenizer 元数据，但模型权重与 GPU 内存在 Worker 阶段才真正加载。</dd></div>
+        </dl>
+
+        <div class="source-line">
+          <a href="../vllm/engine/arg_utils.py#L1424-L1432">vllm/engine/arg_utils.py:1424-1432</a>
+          <a href="../vllm/engine/arg_utils.py#L1567-L1624">vllm/engine/arg_utils.py:1567-1624</a>
+          <a href="../vllm/config/parallel.py#L793-L838">vllm/config/parallel.py:793-838</a>
+          <a href="../vllm/config/model.py#L435-L485">vllm/config/model.py:435-485</a>
+        </div>
+
+        <div class="call-chain">
+          <div><strong>AsyncEngineArgs.from_cli_args(args)</strong><span>读取 CLI dataclass 字段，屏蔽前端专有参数。</span></div>
+          <div><strong>create_engine_config(...)</strong><span>构造模型、缓存、并行、设备和编译配置。</span></div>
+          <div><strong>ParallelConfig.__post_init__()</strong><span>推导 world size，未显式指定时选择 uni 或 mp。</span></div>
+          <div><strong>ModelConfig(...)</strong><span>读取 HF 模型配置、tokenizer 元数据，确定最大长度等。</span></div>
+          <div><strong>Executor.get_class(vllm_config)</strong><span>后续在 AsyncLLM 构造中解析实际执行器类。</span></div>
+          <div><strong>VllmConfig</strong><span>作为跨进程、跨组件的一致配置契约。</span></div>
+        </div>
+
+        <h3>默认 Executor 规则</h3>
+        <div class="formula">
+          <code>world_size_across_dp = world_size × data_parallel_size</code>；
+          <code>world_size = tensor_parallel_size × pipeline_parallel_size × prefill_context_parallel_size</code>。
+          当前逻辑在没有显式 backend 时：<code>world_size == 1</code> 选择 <code>uni</code>；
+          <code>world_size_across_dp &gt; 1</code> 通常选择 <code>mp</code>，另有 TPU、Ray placement group 等覆盖分支。
+        </div>
+
+        <h3>这一阶段还没有加载权重</h3>
+        <p><code>ModelConfig</code> 主要解析模型标识、HF 配置、tokenizer 信息和能力约束。真正的模型类实例化、权重文件读取、量化后处理发生在 GPU Worker 的 <code>load_model</code> 调用中。</p>
+
+        <div class="chapter-nav">
+          <a href="#bind-socket">← socket</a>
+          <a href="#async-llm">下一页：AsyncLLM →</a>
+        </div>
+      </section>
+
+      <section class="chapter" id="async-llm" aria-labelledby="async-llm-title">
+        <div class="eyebrow"><span class="phase-chip">05 / ASYNC LLM</span><span>frontend <code>EngineClient</code></span></div>
+        <h2 id="async-llm-title"><code>AsyncLLM.from_vllm_config</code>：前端与 EngineCore 的交界</h2>
+
+        <dl class="contract">
+          <div><dt>作用</dt><dd>创建一个异步引擎客户端，负责把 HTTP 请求转换为 <code>EngineCoreRequest</code>，并把引擎输出转换为 API 侧可消费的结果。</dd></div>
+          <div><dt>关键入参</dt><dd><code>vllm_config</code>、<code>executor_class</code>、日志开关、<code>client_addresses</code>、<code>client_count</code>、<code>client_index</code>。</dd></div>
+          <div><dt>内部处理</dt><dd>创建 renderer、<code>InputProcessor</code>、<code>OutputProcessor</code>；调用 <code>EngineCoreClient.make_async_mp_client</code>；建立统计 logger；启动输出处理 async task。</dd></div>
+          <div><dt>返回 / 下一步</dt><dd>返回 <code>AsyncLLM</code>。构造返回时，底层 <code>AsyncMPClient</code> 已经完成所有 EngineCore 的 ready 等待；下一步前端会构建 FastAPI app。</dd></div>
+        </dl>
+
+        <div class="source-line">
+          <a href="../vllm/entrypoints/openai/api_server.py#L108-L154">vllm/entrypoints/openai/api_server.py:108-154</a>
+          <a href="../vllm/v1/engine/async_llm.py#L73-L231">vllm/v1/engine/async_llm.py:73-231</a>
+          <a href="../vllm/v1/engine/core_client.py#L105-L130">vllm/v1/engine/core_client.py:105-130</a>
+        </div>
+
+        <div class="code-block">
+          <div class="code-head">
+            <span>vllm/v1/engine/async_llm.py</span>
+            <a href="../vllm/v1/engine/async_llm.py#L134-L155">L134-L155</a>
+          </div>
+          <pre><code><span class="code-line"><span class="ln">134</span><span class="lc">self.renderer = renderer = renderer_from_config(self.vllm_config)</span></span>
+<span class="code-line"><span class="ln">135</span><span class="lc"></span></span>
+<span class="code-line"><span class="ln">136</span><span class="lc"><span class="cm"># Convert EngineInput --&gt; EngineCoreRequest.</span></span></span>
+<span class="code-line"><span class="ln">137</span><span class="lc">self.input_processor = InputProcessor(self.vllm_config, renderer)</span></span>
+<span class="code-line"><span class="ln">138</span><span class="lc"></span></span>
+<span class="code-line"><span class="ln">139</span><span class="lc"><span class="cm"># Converts EngineCoreOutputs --&gt; RequestOutput.</span></span></span>
+<span class="code-line"><span class="ln">140</span><span class="lc">self.output_processor = OutputProcessor(</span></span>
+<span class="code-line"><span class="ln">141</span><span class="lc">    renderer.tokenizer,</span></span>
+<span class="code-line"><span class="ln">142</span><span class="lc">    log_stats=self.log_stats,</span></span>
+<span class="code-line"><span class="ln">143</span><span class="lc">    stream_interval=self.vllm_config.scheduler_config.stream_interval,</span></span>
+<span class="code-line"><span class="ln">144</span><span class="lc">    tracing_enabled=tracing_endpoint <span class="kw">is not</span> <span class="kw">None</span>,</span></span>
+<span class="code-line"><span class="ln">145</span><span class="lc">)</span></span>
+<span class="code-line"><span class="ln">146</span><span class="lc"></span></span>
+<span class="code-line"><span class="ln">147</span><span class="lc"><span class="cm"># EngineCore (starts the engine in background process).</span></span></span>
+<span class="code-line"><span class="ln">148</span><span class="lc">self.engine_core = EngineCoreClient.make_async_mp_client(</span></span>
+<span class="code-line"><span class="ln">149</span><span class="lc">    vllm_config=vllm_config,</span></span>
+<span class="code-line"><span class="ln">150</span><span class="lc">    executor_class=executor_class,</span></span>
+<span class="code-line"><span class="ln">151</span><span class="lc">    log_stats=self.log_stats,</span></span>
+<span class="code-line"><span class="ln">152</span><span class="lc">    client_addresses=client_addresses,</span></span>
+<span class="code-line"><span class="ln">153</span><span class="lc">    client_count=client_count,</span></span>
+<span class="code-line"><span class="ln">154</span><span class="lc">    client_index=client_index,</span></span>
+<span class="code-line"><span class="ln">155</span><span class="lc">)</span></span></code></pre>
+        </div>
+
+        <h3>客户端类型分支</h3>
+        <div class="branch-tree">
+          <div class="branch-root">EngineCoreClient.make_async_mp_client(...)</div>
+          <ul class="branch-list">
+            <li><strong>AsyncMPClient</strong><span><code>data_parallel_size == 1</code>。一个前端客户端管理一个 EngineCore。</span></li>
+            <li><strong>DPLBAsyncMPClient</strong><span>internal DP LB。前端在多个 DP rank 之间做请求分发。</span></li>
+            <li><strong>DPAsyncMPClient</strong><span>external DP LB。每个前端对应自己的 DP rank，外部 LB 负责分发。</span></li>
+          </ul>
+        </div>
+
+        <h3>返回值为何代表“引擎已就绪”</h3>
+        <p><code>AsyncLLM.__init__</code> 内的 <code>make_async_mp_client</code> 不是只创建一个普通对象。其下的 <code>MPClient.__init__</code> 会启动或连接 EngineCore，然后阻塞等待每个 EngineCore 通过 ZMQ 回传 ready 响应。只有收齐后，构造函数才返回。</p>
+
+        <div class="chapter-nav">
+          <a href="#engine-config">← 配置</a>
+          <a href="#launch-core">下一页：launch_core_engines →</a>
+        </div>
+      </section>
+
+      <section class="chapter" id="launch-core" aria-labelledby="launch-core-title">
+        <div class="eyebrow"><span class="phase-chip">06 / PROCESS SPAWN</span><span>ZMQ handshake + process manager</span></div>
+        <h2 id="launch-core-title"><code>launch_core_engines</code>：把 EngineCore 放到后台进程</h2>
+
+        <dl class="contract">
+          <div><dt>作用</dt><dd>按数据并行配置创建 EngineCore 进程或 Ray actor，分配 ZMQ 输入/输出地址与握手地址，并在退出上下文时等待引擎启动成功。</dd></div>
+          <div><dt>关键入参</dt><dd><code>vllm_config</code>、<code>executor_class</code>、<code>log_stats</code>、<code>EngineZmqAddresses</code>、<code>num_api_servers</code>。</dd></div>
+          <div><dt>内部处理</dt><dd>可选创建 multimodal tensor queue 和 DP coordinator；选择 Ray actor 或本地 Process；用 <code>CoreEngineProcManager</code> 启动 EngineCore；通过 <code>wait_for_engine_startup</code> 完成 HELLO/READY 握手。</dd></div>
+          <div><dt>返回 / 下一步</dt><dd>上下文产出 <code>(engine_manager, coordinator, addresses, tensor_queue)</code>；前端客户端使用这些地址连接 EngineCore，并等待 worker/模型级 ready。</dd></div>
+        </dl>
+
+        <div class="source-line">
+          <a href="../vllm/v1/engine/core_client.py#L473-L619">vllm/v1/engine/core_client.py:473-619</a>
+          <a href="../vllm/v1/engine/utils.py#L83-L140">vllm/v1/engine/utils.py:83-140</a>
+          <a href="../vllm/v1/engine/utils.py#L954-L1104">vllm/v1/engine/utils.py:954-1104</a>
+          <a href="../vllm/v1/engine/utils.py#L1106-L1230">vllm/v1/engine/utils.py:1106-1230</a>
+        </div>
+
+        <figure class="diagram">
+          <div class="lane-diagram" role="img" aria-label="EngineCore 启动中的前端、EngineCore 与 Worker 进程泳道">
+            <div class="lane-name">阶段</div>
+            <div class="lane-name">前端进程</div>
+            <div class="lane-name">EngineCore 进程</div>
+            <div class="lane-name">Worker 进程</div>
+            <div class="lane-name">通信资源</div>
+
+            <div class="lane-cell"><strong>A. 建资源</strong><small>AsyncMPClient</small></div>
+            <div class="lane-cell host"><strong>绑定 ROUTER/PULL</strong><small>准备 input/output ZMQ</small></div>
+            <div class="lane-cell"><span class="event-idle">—</span></div>
+            <div class="lane-cell"><span class="event-idle">—</span></div>
+            <div class="lane-cell core"><strong>handshake socket</strong><small>由 launch_core_engines 管理</small></div>
+
+            <div class="lane-cell"><strong>B. spawn</strong><small>CoreEngineProcManager</small></div>
+            <div class="lane-cell host"><strong>进入 with 上下文</strong><small>等待 ready</small></div>
+            <div class="lane-cell core"><strong>启动 run_engine_core</strong><small>设置进程标题与信号</small></div>
+            <div class="lane-cell"><span class="event-idle">稍后由 Executor 创建</span></div>
+            <div class="lane-cell core"><strong>HELLO</strong><small>EngineCore → launcher</small></div>
+
+            <div class="lane-cell"><strong>C. 下发地址</strong><small>launcher</small></div>
+            <div class="lane-cell host"><strong>等待 EngineCoreReadyResponse</strong><small>模型完成后才到达</small></div>
+            <div class="lane-cell core"><strong>构造 EngineCore</strong><small>Executor → Worker → Model</small></div>
+            <div class="lane-cell worker"><strong>init_device / load_model</strong><small>分配 GPU 与权重</small></div>
+            <div class="lane-cell core"><strong>init 消息</strong><small>包含 inputs/outputs addresses</small></div>
+
+            <div class="lane-cell"><strong>D. ready</strong><small>收齐所有引擎</small></div>
+            <div class="lane-cell host"><strong>_apply_ready_response</strong><small>同步 max_model_len / blocks</small></div>
+            <div class="lane-cell core"><strong>启动 IO 线程</strong><small>发送 ready payload</small></div>
+            <div class="lane-cell worker"><strong>Worker READY</strong><small>进入 busy loop 等待 RPC</small></div>
+            <div class="lane-cell core"><strong>双向 ZMQ</strong><small>请求/输出通道可用</small></div>
+          </div>
+          <figcaption>图：EngineCore 启动不是一次普通函数调用，而是“进程创建 + 两次 ready 握手 + 工作线程就绪”的组合。</figcaption>
+        </figure>
+
+        <h3>进程启动与就绪的精确顺序</h3>
+        <ol class="plain">
+          <li><code>MPClient.__init__</code> 在没有外部 `client_addresses` 时，自己分配地址、绑定前端 ZMQ socket，并进入 <code>launch_core_engines</code>。</li>
+          <li><code>launch_core_engines</code> 先创建本地 <code>EngineCoreProc</code> 进程，再把 manager 和地址 yield 给调用者。</li>
+          <li>上下文退出时执行 <code>wait_for_engine_startup</code>，等待每个 EngineCore 发送 HELLO，并回传初始化地址。</li>
+          <li>EngineCore 构造过程中才会创建 Executor、Worker、模型和 KV Cache；全部完成后才发送 READY 和前端 ready response。</li>
+          <li>前端收到每个 engine 的 ready response 后，<code>MPClient</code> 才结束构造。</li>
+        </ol>
+
+        <div class="callout error">
+          <strong>启动失败检测</strong>
+          <p><code>wait_for_engine_startup</code> 同时 poll EngineCore 进程 sentinel；如果进程在握手完成前退出，会抛出 <code>RuntimeError("Engine core initialization failed...")</code>，不会静默等待到超时。</p>
+        </div>
+
+        <div class="chapter-nav">
+          <a href="#async-llm">← AsyncLLM</a>
+          <a href="#engine-core-proc">下一页：EngineCoreProc →</a>
+        </div>
+      </section>
+
+      <section class="chapter" id="engine-core-proc" aria-labelledby="engine-core-proc-title">
+        <div class="eyebrow"><span class="phase-chip">07 / ENGINE CORE</span><span>handshake → executor → IO threads</span></div>
+        <h2 id="engine-core-proc-title"><code>EngineCoreProc</code> 与 <code>EngineCore</code>：真正搭建引擎内环</h2>
+
+        <dl class="contract">
+          <div><dt>作用</dt><dd>在独立进程中创建调度器、模型执行器和 ZMQ I/O 线程，准备请求输入、输出回传和崩溃通知。</dd></div>
+          <div><dt>关键入参</dt><dd><code>vllm_config</code>、<code>local_client</code>、<code>handshake_address</code>、<code>executor_class</code>、<code>log_stats</code>、可选的 <code>client_handshake_address</code>、<code>tensor_queue</code>。</dd></div>
+          <div><dt>内部处理</dt><dd>创建 input/output queue；执行 HELLO 握手并接收地址；初始化 DP；调用 <code>EngineCore.__init__</code>；启动 input/output sockets 线程；发送 ready；进入 <code>run_busy_loop</code>。</dd></div>
+          <div><dt>返回 / 下一步</dt><dd>后台进程常驻。对前端而言，关键出参是 <code>EngineCoreReadyResponse</code> 和 ZMQ ready 消息；随后请求可以通过 input socket 进入 scheduler。</dd></div>
+        </dl>
+
+        <div class="source-line">
+          <a href="../vllm/v1/engine/core.py#L802-L980">vllm/v1/engine/core.py:802-980</a>
+          <a href="../vllm/v1/engine/core.py#L982-L1057">vllm/v1/engine/core.py:982-1057</a>
+          <a href="../vllm/v1/engine/core.py#L1060-L1143">vllm/v1/engine/core.py:1060-1143</a>
+          <a href="../vllm/v1/engine/core.py#L1368-L1460">vllm/v1/engine/core.py:1368-1460</a>
+        </div>
+
+        <h3><code>EngineCore.__init__</code> 内部做什么</h3>
+        <div class="call-chain">
+          <div><strong>load_general_plugins()</strong><span>确保引擎级插件已注册。</span></div>
+          <div><strong>executor_class(vllm_config)</strong><span>创建 UniProc/Multiproc/Ray Executor。</span></div>
+          <div><strong>_initialize_kv_caches()</strong><span>profile 显存、生成 KV 配置、分配 KV、warmup。</span></div>
+          <div><strong>Scheduler(...)</strong><span>构造调度器并接收 KV 配置。</span></div>
+          <div><strong>MM / connector / batch queue</strong><span>多模态缓存、KV connector 握手、PP 批队列。</span></div>
+          <div><strong>freeze_gc_heap()</strong><span>启动后的堆标记为静态，降低 old-gen GC 停顿。</span></div>
+        </div>
+
+        <div class="code-block">
+          <div class="code-head">
+            <span>vllm/v1/engine/core.py</span>
+            <a href="../vllm/v1/engine/core.py#L113-L152">L113-L152</a>
+          </div>
+          <pre><code><span class="code-line"><span class="ln">113</span><span class="lc">self.log_stats = log_stats</span></span>
+<span class="code-line"><span class="ln">114</span><span class="lc"></span></span>
+<span class="code-line"><span class="ln">115</span><span class="lc"><span class="cm"># Setup Model.</span></span></span>
+<span class="code-line"><span class="ln">116</span><span class="lc">self.model_executor = executor_class(vllm_config)</span></span>
+<span class="code-line"><span class="ln">117</span><span class="lc"><span class="kw">if</span> executor_fail_callback <span class="kw">is not</span> <span class="kw">None</span>:</span></span>
+<span class="code-line"><span class="ln">118</span><span class="lc">    self.model_executor.register_failure_callback(executor_fail_callback)</span></span>
+<span class="code-line"><span class="ln">119</span><span class="lc"></span></span>
+<span class="code-line"><span class="ln">120</span><span class="lc">self.available_gpu_memory_for_kv_cache = -1</span></span>
+<span class="code-line"><span class="ln">121</span><span class="lc"></span></span>
+<span class="code-line"><span class="ln">122</span><span class="lc"><span class="kw">if</span> envs.VLLM_ELASTIC_EP_SCALE_UP_LAUNCH:</span></span>
+<span class="code-line"><span class="ln">123</span><span class="lc">    self._eep_scale_up_before_kv_init()</span></span>
+<span class="code-line"><span class="ln">124</span><span class="lc"></span></span>
+<span class="code-line"><span class="ln">125</span><span class="lc"><span class="cm"># Setup KV Caches and update CacheConfig after profiling.</span></span></span>
+<span class="code-line"><span class="ln">126</span><span class="lc">kv_cache_config = self._initialize_kv_caches(vllm_config)</span></span>
+<span class="code-line"><span class="ln">127</span><span class="lc">self.structured_output_manager = StructuredOutputManager(vllm_config)</span></span>
+<span class="code-line"><span class="ln">128</span><span class="lc"></span></span>
+<span class="code-line"><span class="ln">129</span><span class="lc"><span class="cm"># Setup scheduler.</span></span></span>
+<span class="code-line"><span class="ln">130</span><span class="lc">Scheduler = vllm_config.scheduler_config.get_scheduler_cls()</span></span>
+<span class="code-line"><span class="ln">131</span><span class="lc">...</span></span>
+<span class="code-line"><span class="ln">132</span><span class="lc"></span></span>
+<span class="code-line"><span class="ln">145</span><span class="lc">self.scheduler = Scheduler(</span></span>
+<span class="code-line"><span class="ln">146</span><span class="lc">    vllm_config=vllm_config,</span></span>
+<span class="code-line"><span class="ln">147</span><span class="lc">    kv_cache_config=kv_cache_config,</span></span>
+<span class="code-line"><span class="ln">148</span><span class="lc">    structured_output_manager=self.structured_output_manager,</span></span>
+<span class="code-line"><span class="ln">149</span><span class="lc">    ...,</span></span>
+<span class="code-line"><span class="ln">152</span><span class="lc">)</span></span></code></pre>
+        </div>
+
+        <h3>握手与 ready 的语义</h3>
+        <ul class="plain">
+          <li><strong>HELLO</strong> 表示 EngineCore 进程已起来、可以接收初始化元数据；此时还没准备好推理。</li>
+          <li><strong>init 消息</strong> 携带前端输入/输出 socket 地址，必要时还带 DP coordinator 配置。</li>
+          <li><strong>READY</strong> 在 <code>EngineCoreProc</code> 构造完成后发送，表示 Executor/Worker/模型/KV/IO 线程已完成。</li>
+          <li><strong><code>EngineCoreReadyResponse</code></strong> 另外通过前端 input socket 发出，用于把运行后确定的配置同步回 <code>VllmConfig</code>。</li>
+        </ul>
+
+        <div class="callout warning">
+          <strong>异常与退出</strong>
+          <p><code>run_engine_core</code> 捕获异常时，如果 EngineCore 已构造则发送 <code>ENGINE_CORE_DEAD</code>，最后在 <code>finally</code> 中关闭 executor/scheduler 并恢复信号处理器。前端通过 EngineCore monitor 将引擎标记为 dead。</p>
+        </div>
+
+        <div class="chapter-nav">
+          <a href="#launch-core">← 进程启动</a>
+          <a href="#executor">下一页：Executor →</a>
+        </div>
+      </section>
+
+      <section class="chapter" id="executor" aria-labelledby="executor-title">
+        <div class="eyebrow"><span class="phase-chip">08 / EXECUTOR</span><span>uni · mp · ray</span></div>
+        <h2 id="executor-title"><code>Executor.get_class</code> 与执行器构造：谁负责管理 Worker</h2>
+
+        <dl class="contract">
+          <div><dt>作用</dt><dd>把配置解析为具体 Executor 类，并负责在一个或多个 Worker 上执行模型与 collective RPC。</dd></div>
+          <div><dt>关键入参</dt><dd><code>vllm_config.parallel_config.distributed_executor_backend</code>、world size、TP/PP/DP 配置、device 配置。</dd></div>
+          <div><dt>内部处理</dt><dd>后端为 <code>uni</code> 时在当前 EngineCore 进程内创建 driver worker；为 <code>mp</code> 时 spawn 多个 Worker 进程并等待 ready；为 <code>ray</code> 时创建 Ray actor。</dd></div>
+          <div><dt>返回 / 下一步</dt><dd>返回一个已初始化的 Executor 实例。它持有 Worker 句柄与通信队列；下一步 EngineCore 调用它获取 KV spec、可用显存和执行 warmup。</dd></div>
+        </dl>
+
+        <div class="source-line">
+          <a href="../vllm/v1/executor/abstract.py#L37-L123">vllm/v1/executor/abstract.py:37-123</a>
+          <a href="../vllm/v1/executor/uniproc_executor.py#L26-L61">vllm/v1/executor/uniproc_executor.py:26-61</a>
+          <a href="../vllm/v1/executor/multiproc_executor.py#L102-L246">vllm/v1/executor/multiproc_executor.py:102-246</a>
+          <a href="../vllm/v1/executor/multiproc_executor.py#L717-L861">vllm/v1/executor/multiproc_executor.py:717-861</a>
+        </div>
+
+        <h3>两条最常见的执行模型</h3>
+        <div class="two-col">
+          <div>
+            <h4>UniProcExecutor</h4>
+            <p>在 EngineCore 进程中直接创建 <code>WorkerWrapperBase</code>，随后 <code>init_worker</code>、<code>init_device</code>、<code>load_model</code>。单 GPU 默认走这条路径，进程数量最少。</p>
+          </div>
+          <div>
+            <h4>MultiprocExecutor</h4>
+            <p>EngineCore 作为父进程创建多个 <code>WorkerProc</code> 子进程，每个子进程初始化自己的 worker、device 和模型，并通过共享消息队列执行 scheduler RPC。</p>
+          </div>
+        </div>
+
+        <div class="code-block">
+          <div class="code-head">
+            <span>vllm/v1/executor/uniproc_executor.py</span>
+            <a href="../vllm/v1/executor/uniproc_executor.py#L46-L53">L46-L53</a>
+          </div>
+          <pre><code><span class="code-line"><span class="ln">46</span><span class="lc">self.driver_worker.init_worker(all_kwargs=[kwargs])</span></span>
+<span class="code-line"><span class="ln">47</span><span class="lc">self.driver_worker.init_device()</span></span>
+<span class="code-line"><span class="ln">48</span><span class="lc"></span></span>
+<span class="code-line"><span class="ln">49</span><span class="lc"><span class="kw">if</span> envs.VLLM_ELASTIC_EP_SCALE_UP_LAUNCH:</span></span>
+<span class="code-line"><span class="ln">50</span><span class="lc">    self.driver_worker.elastic_ep_execute(<span class="str">"load_model"</span>)</span></span>
+<span class="code-line"><span class="ln">51</span><span class="lc"><span class="kw">else</span>:</span></span>
+<span class="code-line"><span class="ln">52</span><span class="lc">    self.driver_worker.load_model()</span></span>
+<span class="code-line"><span class="ln">53</span><span class="lc">current_platform.update_block_size_for_backend(self.vllm_config)</span></span></code></pre>
+        </div>
+
+        <h3>MultiprocExecutor 的 ready 屏障</h3>
+        <p>父进程先创建所有 WorkerProc，再调用 <code>WorkerProc.wait_for_ready()</code>。每个子进程只有在 <code>WorkerProc.__init__</code> 完成 <code>init_worker</code>、<code>init_device</code>、<code>load_model</code> 后才通过 ready pipe 发送 <code>{"status": "READY", ...}</code>。任何一个子进程初始化失败，父进程都会终止其余 worker 并抛错。</p>
+
+        <div class="chapter-nav">
+          <a href="#engine-core-proc">← EngineCore</a>
+          <a href="#worker-init">下一页：Worker →</a>
+        </div>
+      </section>
+
+      <section class="chapter" id="worker-init" aria-labelledby="worker-init-title">
+        <div class="eyebrow"><span class="phase-chip">09 / WORKER</span><span>device · distributed env · model runner</span></div>
+        <h2 id="worker-init-title"><code>Worker.init_device</code>：设备与分布式环境先于权重</h2>
+
+        <dl class="contract">
+          <div><dt>作用</dt><dd>构造平台相关的 Worker，绑定本 rank 的 GPU，初始化 torch distributed 与 TP/PP/CP 进程组，测量初始显存，并创建 <code>GPUModelRunner</code>。</dd></div>
+          <div><dt>关键入参</dt><dd><code>vllm_config</code>、<code>local_rank</code>、<code>rank</code>、<code>distributed_init_method</code>、<code>is_driver_worker</code>、共享 worker lock。</dd></div>
+          <div><dt>内部处理</dt><dd><code>WorkerWrapperBase.init_worker</code> 解析 worker class；<code>GPUWorker.init_device</code> 选择 <code>cuda:{local_rank}</code>，初始化分布式环境、seed、workspace 和 model runner。</dd></div>
+          <div><dt>返回 / 下一步</dt><dd><code>init_device</code> 无显式返回值；对象状态包含 device、init memory snapshot、requested memory 和 model_runner。下一步调用 <code>Worker.load_model</code>。</dd></div>
+        </dl>
+
+        <div class="source-line">
+          <a href="../vllm/v1/worker/worker_base.py#L221-L305">vllm/v1/worker/worker_base.py:221-305</a>
+          <a href="../vllm/v1/worker/gpu_worker.py#L105-L155">vllm/v1/worker/gpu_worker.py:105-155</a>
+          <a href="../vllm/v1/worker/gpu_worker.py#L218-L315">vllm/v1/worker/gpu_worker.py:218-315</a>
+          <a href="../vllm/v1/worker/gpu_worker.py#L1024-L1064">vllm/v1/worker/gpu_worker.py:1024-1064</a>
+        </div>
+
+        <div class="call-chain">
+          <div><strong>WorkerWrapperBase.init_worker</strong><span>按 <code>worker_cls</code> 解析平台 worker 并构造。</span></div>
+          <div><strong>load_general_plugins</strong><span>加载通用插件与 worker 扩展。</span></div>
+          <div><strong>Worker.__init__</strong><span>设置 matmul precision、sleep buffers、profiler 配置。</span></div>
+          <div><strong>init_device</strong><span>选择 CUDA 设备并初始化分布式环境。</span></div>
+          <div><strong>init_worker_distributed_environment</strong><span>建立 world、TP、PP、CP 进程组。</span></div>
+          <div><strong>GPUModelRunner(...)</strong><span>准备输入批、KV 元数据和模型执行状态。</span></div>
+        </div>
+
+        <div class="code-block">
+          <div class="code-head">
+            <span>vllm/v1/worker/gpu_worker.py</span>
+            <a href="../vllm/v1/worker/gpu_worker.py#L254-L310">L254-L310</a>
+          </div>
+          <pre><code><span class="code-line"><span class="ln">254</span><span class="lc">self.device = torch.device(<span class="str">f"cuda:{self.local_rank}"</span>)</span></span>
+<span class="code-line"><span class="ln">255</span><span class="lc">torch.accelerator.set_device_index(self.device)</span></span>
+<span class="code-line"><span class="ln">256</span><span class="lc">current_platform.check_if_supports_dtype(self.model_config.dtype)</span></span>
+<span class="code-line"><span class="ln">257</span><span class="lc"></span></span>
+<span class="code-line"><span class="ln">258</span><span class="lc"><span class="cm"># Initialize the distributed environment BEFORE taking memory snapshot.</span></span></span>
+<span class="code-line"><span class="ln">259</span><span class="lc">init_worker_distributed_environment(</span></span>
+<span class="code-line"><span class="ln">260</span><span class="lc">    self.vllm_config,</span></span>
+<span class="code-line"><span class="ln">261</span><span class="lc">    self.rank,</span></span>
+<span class="code-line"><span class="ln">262</span><span class="lc">    self.distributed_init_method,</span></span>
+<span class="code-line"><span class="ln">263</span><span class="lc">    self.local_rank,</span></span>
+<span class="code-line"><span class="ln">264</span><span class="lc">    current_platform.dist_backend,</span></span>
+<span class="code-line"><span class="ln">265</span><span class="lc">)</span></span></code></pre>
+        </div>
+
+        <h3>线程与进程层级</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>层级</th><th>典型载体</th><th>职责</th><th>何时创建</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>API server</td><td>主进程或 <code>ApiServer_i</code></td><td>HTTP、FastAPI state、AsyncLLM 客户端</td><td><code>run_server</code> / <code>APIServerProcessManager</code></td></tr>
+              <tr><td>EngineCore</td><td><code>EngineCore</code> 进程</td><td>scheduler、executor、请求循环</td><td><code>CoreEngineProcManager</code></td></tr>
+              <tr><td>Worker</td><td>UniProc 同进程或 <code>VllmWorker-i</code></td><td>device、模型、KV、模型执行</td><td>Executor <code>_init_executor</code></td></tr>
+              <tr><td>I/O / watchdog</td><td>EngineCore sockets、Uvicorn、monitor thread</td><td>ZMQ 队列、HTTP accept、故障监控</td><td>组件初始化后</td></tr>
+              <tr><td>HTTP listener</td><td>Uvicorn server task</td><td>accept 并调度 FastAPI app</td><td>引擎就绪后 <code>serve_http</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="chapter-nav">
+          <a href="#executor">← Executor</a>
+          <a href="#model-load">下一页：模型加载 →</a>
+        </div>
+      </section>
+
+      <section class="chapter" id="model-load" aria-labelledby="model-load-title">
+        <div class="eyebrow"><span class="phase-chip">10 / MODEL LOAD</span><span>architecture → weights → kernel format</span></div>
+        <h2 id="model-load-title"><code>GPUModelRunner.load_model</code>：模型权重真正进入 GPU</h2>
+
+        <dl class="contract">
+          <div><dt>作用</dt><dd>选择模型加载器，按模型架构实例化 <code>nn.Module</code>，加载 checkpoint 权重，执行量化/注意力后处理，并最终返回 eval 模式模型。</dd></div>
+          <div><dt>关键入参</dt><dd><code>load_dummy_weights</code>、<code>vllm_config</code>、<code>model_config</code>、<code>load_config</code>、目标 device、dtype、可选的 LoRA/投机解码配置。</dd></div>
+          <div><dt>内部处理</dt><dd><code>get_model_loader</code> 选择 loader；<code>BaseModelLoader.load_model</code> 执行 <code>initialize_model</code>、<code>load_weights</code>、<code>process_weights_after_loading</code>；GPU runner 记录显存并准备通信 buffer。</dd></div>
+          <div><dt>返回 / 下一步</dt><dd><code>load_model</code> 在 runner 上设置 <code>self.model</code>，不向前端返回模型对象；下一步 EngineCore 继续 KV 初始化与 warmup。</dd></div>
+        </dl>
+
+        <div class="source-line">
+          <a href="../vllm/v1/worker/gpu_worker.py#L318-L323">vllm/v1/worker/gpu_worker.py:318-323</a>
+          <a href="../vllm/v1/worker/gpu_model_runner.py#L4746-L4848">vllm/v1/worker/gpu_model_runner.py:4746-4848</a>
+          <a href="../vllm/model_executor/model_loader/__init__.py#L120-L140">vllm/model_executor/model_loader/__init__.py:120-140</a>
+          <a href="../vllm/model_executor/model_loader/base_loader.py#L42-L83">vllm/model_executor/model_loader/base_loader.py:42-83</a>
+          <a href="../vllm/model_executor/model_loader/utils.py#L35-L123">vllm/model_executor/model_loader/utils.py:35-123</a>
+          <a href="../vllm/model_executor/model_loader/default_loader.py#L367-L397">vllm/model_executor/model_loader/default_loader.py:367-397</a>
+        </div>
+
+        <div class="code-block">
+          <div class="code-head">
+            <span>vllm/v1/worker/gpu_model_runner.py</span>
+            <a href="../vllm/v1/worker/gpu_model_runner.py#L4762-L4777">L4762-L4777</a>
+          </div>
+          <pre><code><span class="code-line"><span class="ln">4762</span><span class="lc"><span class="kw">try</span>:</span></span>
+<span class="code-line"><span class="ln">4763</span><span class="lc">    <span class="kw">with</span> DeviceMemoryProfiler() <span class="kw">as</span> m:</span></span>
+<span class="code-line"><span class="ln">4764</span><span class="lc">        time_before_load = time.perf_counter()</span></span>
+<span class="code-line"><span class="ln">4765</span><span class="lc">        <span class="kw">if</span> load_dummy_weights:</span></span>
+<span class="code-line"><span class="ln">4766</span><span class="lc">            self.load_config.load_format = <span class="str">"dummy"</span></span></span>
+<span class="code-line"><span class="ln">4767</span><span class="lc">        model_loader = get_model_loader(self.load_config)</span></span>
+<span class="code-line"><span class="ln">4768</span><span class="lc">        self.model = model_loader.load_model(</span></span>
+<span class="code-line"><span class="ln">4769</span><span class="lc">            vllm_config=self.vllm_config, model_config=self.model_config</span></span>
+<span class="code-line"><span class="ln">4770</span><span class="lc">        )</span></span></code></pre>
+        </div>
+
+        <h3>模型加载器内部步骤</h3>
+        <ol class="plain">
+          <li><code>get_model_loader(load_config)</code> 根据 <code>load_format</code> 选择默认、GGUF、BitsAndBytes、tensorizer 或 sharded-state loader；未知格式直接 <code>ValueError</code>。</li>
+          <li><code>initialize_model()</code> 通过模型注册表解析架构类；新式模型类接收 <code>vllm_config</code> 与 <code>prefix</code>；旧式类进入兼容分支。</li>
+          <li><code>BaseModelLoader.load_model()</code> 在目标 device context 与 dtype context 中实例化模型，然后调用 <code>load_weights()</code>。</li>
+          <li>默认 loader 通过模型自身的 <code>load_weights(iterator)</code> 读取 checkpoint；非量化模型会校验是否有参数未加载。</li>
+          <li><code>process_weights_after_loading()</code> 执行量化方法重排、反量化、Attention/MLA 权重后处理，最后 <code>model.eval()</code>。</li>
+        </ol>
+
+        <div class="two-col">
+          <div>
+            <h4>分支：dummy weights</h4>
+            <p>测试或特殊启动路径可把 <code>load_format</code> 改成 <code>dummy</code>，跳过真实 checkpoint；模型结构和 KV 初始化仍会完整执行。</p>
+          </div>
+          <div>
+            <h4>分支：LoRA / drafter</h4>
+            <p>基础模型加载后可能继续加载 LoRA 或 speculative drafter。Drafter 会持有目标模型引用，用于后续 draft token 生成。</p>
+          </div>
+        </div>
+
+        <div class="callout error">
+          <strong>OOM 回退信息</strong>
+          <p><code>GPUModelRunner.load_model</code> 捕获 <code>torch.cuda.OutOfMemoryError</code>，附加降低 <code>--gpu-memory-utilization</code>、增加 TP 或启用量化的建议后重新抛出；不会把权重加载失败伪装成成功。</p>
+        </div>
+
+        <div class="chapter-nav">
+          <a href="#worker-init">← Worker</a>
+          <a href="#kv-cache">下一页：KV Cache →</a>
+        </div>
+      </section>
+
+      <section class="chapter" id="kv-cache" aria-labelledby="kv-cache-title">
+        <div class="eyebrow"><span class="phase-chip">11 / KV CACHE</span><span>profile → allocate → warmup</span></div>
+        <h2 id="kv-cache-title"><code>_initialize_kv_caches</code>：把剩余显存变成可调度缓存</h2>
+
+        <dl class="contract">
+          <div><dt>作用</dt><dd>收集模型需要的 KV cache 规格，测量可用于 KV 的显存，生成 block/group 配置，下发 Worker 分配缓存，并执行编译与 warmup。</dd></div>
+          <div><dt>关键入参</dt><dd><code>VllmConfig</code> 中的模型配置、cache config、compilation config、parallel config，以及 Executor 暴露的 worker RPC。</dd></div>
+          <div><dt>内部处理</dt><dd><code>get_kv_cache_specs</code>；<code>determine_available_memory</code> profile；<code>get_kv_cache_configs</code> 计算 block 数；<code>initialize_from_config</code> 分配；<code>compile_or_warm_up_model</code> 编译与抓取 cudagraph。</dd></div>
+          <div><dt>返回 / 下一步</dt><dd>返回 scheduler 使用的 <code>KVCacheConfig</code>，并把最终 block size、num blocks、可能需要 auto-fit 的 max_model_len 写回配置；随后创建 Scheduler。</dd></div>
+        </dl>
+
+        <div class="source-line">
+          <a href="../vllm/v1/engine/core.py#L230-L312">vllm/v1/engine/core.py:230-312</a>
+          <a href="../vllm/v1/executor/abstract.py#L118-L138">vllm/v1/executor/abstract.py:118-138</a>
+          <a href="../vllm/v1/worker/gpu_worker.py#L503-L590">vllm/v1/worker/gpu_worker.py:503-590</a>
+        </div>
+
+        <div class="code-block">
+          <div class="code-head">
+            <span>vllm/v1/engine/core.py</span>
+            <a href="../vllm/v1/engine/core.py#L234-L282">L234-L282</a>
+          </div>
+          <pre><code><span class="code-line"><span class="ln">234</span><span class="lc"><span class="cm"># Get all kv cache needed by the model</span></span></span>
+<span class="code-line"><span class="ln">235</span><span class="lc">kv_cache_specs = self.model_executor.get_kv_cache_specs()</span></span>
+<span class="code-line"><span class="ln">236</span><span class="lc"></span></span>
+<span class="code-line"><span class="ln">237</span><span class="lc">has_kv_cache = any(kv_cache_spec <span class="kw">for</span> kv_cache_spec <span class="kw">in</span> kv_cache_specs)</span></span>
+<span class="code-line"><span class="ln">238</span><span class="lc"><span class="kw">if</span> has_kv_cache:</span></span>
+<span class="code-line"><span class="ln">239</span><span class="lc">    ...</span></span>
+<span class="code-line"><span class="ln">247</span><span class="lc">    <span class="cm"># Profiles the peak memory usage of the model</span></span></span>
+<span class="code-line"><span class="ln">248</span><span class="lc">    available_gpu_memory = self.model_executor.determine_available_memory()</span></span>
+<span class="code-line"><span class="ln">249</span><span class="lc">    self.available_gpu_memory_for_kv_cache = available_gpu_memory[0]</span></span>
+<span class="code-line"><span class="ln">250</span><span class="lc"></span></span>
+<span class="code-line"><span class="ln">260</span><span class="lc">kv_cache_configs = get_kv_cache_configs(</span></span>
+<span class="code-line"><span class="ln">261</span><span class="lc">    vllm_config, kv_cache_specs, available_gpu_memory</span></span>
+<span class="code-line"><span class="ln">262</span><span class="lc">)</span></span>
+<span class="code-line"><span class="ln">281</span><span class="lc"><span class="cm"># Initialize kv cache and warmup the execution</span></span></span>
+<span class="code-line"><span class="ln">282</span><span class="lc">self.model_executor.initialize_from_config(kv_cache_configs)</span></span></code></pre>
+        </div>
+
+        <h3>Executor 与 Worker 的下沉调用</h3>
+        <div class="call-chain">
+          <div><strong>get_kv_cache_specs()</strong><span>collective RPC 到所有 worker，收集层/组规格。</span></div>
+          <div><strong>determine_available_memory()</strong><span>worker profile peak memory，计算 KV 可用字节。</span></div>
+          <div><strong>get_kv_cache_configs()</strong><span>按 block size 与规格计算 group 和 block 数。</span></div>
+          <div><strong>initialize_from_config()</strong><span>在 worker 上分配 KV tensor，初始化 connector。</span></div>
+          <div><strong>compile_or_warm_up_model()</strong><span>warmup kernels，编译，抓取 cudagraph。</span></div>
+          <div><strong>KVCacheConfig → Scheduler</strong><span>调度器根据 block 数管理请求缓存。</span></div>
+        </div>
+
+        <h3>auto-fit 分支</h3>
+        <p>如果 <code>max_model_len=-1</code> 且默认最大长度无法放进显存，内存计算可能缩小 <code>max_model_len</code>。引擎会比较前后值，通过 collective RPC <code>update_max_model_len</code> 把新长度同步给已经启动的 Worker，避免前端与 worker 对上下文长度理解不一致。</p>
+
+        <div class="callout">
+          <strong>返回值的用途</strong>
+          <p>返回的 <code>scheduler_kv_cache_config</code> 并非仅用于日志。它决定 scheduler 可调度的 block 数量、block size 和 KV group 布局，是后续请求能否进入运行队列的直接依据。</p>
+        </div>
+
+        <div class="chapter-nav">
+          <a href="#model-load">← 模型</a>
+          <a href="#ready-handshake">下一页：ready 回传 →</a>
+        </div>
+      </section>
+
+      <section class="chapter" id="ready-handshake" aria-labelledby="ready-handshake-title">
+        <div class="eyebrow"><span class="phase-chip">12 / READY</span><span>EngineCoreReadyResponse</span></div>
+        <h2 id="ready-handshake-title">引擎就绪回传：前端如何知道模型和 KV 都准备好了</h2>
+
+        <dl class="contract">
+          <div><dt>作用</dt><dd>把 EngineCore 初始化后确定的运行参数通过 ZMQ 回传给前端，并让 <code>MPClient</code> 明确知道每个 EngineCore 已可接收请求。</dd></div>
+          <div><dt>关键入参</dt><dd>EngineCore 侧的 <code>max_model_len</code>、<code>num_gpu_blocks</code>、<code>dp_stats_address</code>；前端侧的 input socket 与 <code>VllmConfig</code>。</dd></div>
+          <div><dt>内部处理</dt><dd><code>process_input_sockets</code> 先连接 input sockets，发送 <code>EngineCoreReadyResponse</code>；<code>MPClient</code> 轮询每个 engine identity，调用 <code>_apply_ready_response</code> 同步配置。</dd></div>
+          <div><dt>返回 / 下一步</dt><dd><code>AsyncLLM</code> 构造完成，<code>build_async_engine_client</code> 产出 engine client；前端开始调用 <code>get_supported_tasks</code> 并构建 FastAPI state。</dd></div>
+        </dl>
+
+        <div class="source-line">
+          <a href="../vllm/v1/engine/core.py#L1368-L1428">vllm/v1/engine/core.py:1368-1428</a>
+          <a href="../vllm/v1/engine/core_client.py#L577-L606">vllm/v1/engine/core_client.py:577-606</a>
+          <a href="../vllm/v1/engine/core_client.py#L667-L692">vllm/v1/engine/core_client.py:667-692</a>
+        </div>
+
+        <div class="code-block">
+          <div class="code-head">
+            <span>vllm/v1/engine/core_client.py</span>
+            <a href="../vllm/v1/engine/core_client.py#L577-L595">L577-L595</a>
+          </div>
+          <pre><code><span class="code-line"><span class="ln">577</span><span class="lc"><span class="cm"># Wait for ready messages from each engine on the input socket.</span></span></span>
+<span class="code-line"><span class="ln">578</span><span class="lc">identities = set(self.core_engines)</span></span>
+<span class="code-line"><span class="ln">579</span><span class="lc">sync_input_socket = zmq.Socket.shadow(self.input_socket)</span></span>
+<span class="code-line"><span class="ln">580</span><span class="lc"><span class="kw">while</span> identities:</span></span>
+<span class="code-line"><span class="ln">581</span><span class="lc">    <span class="kw">if not</span> sync_input_socket.poll(</span></span>
+<span class="code-line"><span class="ln">582</span><span class="lc">        timeout=VLLM_ENGINE_READY_TIMEOUT_S * 1000  <span class="cm"># convert to ms</span></span></span>
+<span class="code-line"><span class="ln">583</span><span class="lc">    ):</span></span>
+<span class="code-line"><span class="ln">584</span><span class="lc">        <span class="kw">raise</span> TimeoutError(</span></span>
+<span class="code-line"><span class="ln">585</span><span class="lc">            ...</span></span>
+<span class="code-line"><span class="ln">591</span><span class="lc">        )</span></span>
+<span class="code-line"><span class="ln">593</span><span class="lc">    identity, payload = sync_input_socket.recv_multipart()</span></span>
+<span class="code-line"><span class="ln">594</span><span class="lc">    identities.remove(identity)</span></span>
+<span class="code-line"><span class="ln">595</span><span class="lc">    self._apply_ready_response(payload)</span></span></code></pre>
+        </div>
+
+        <h3><code>EngineCoreReadyResponse</code> 的字段与作用</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>字段</th><th>来源</th><th>前端处理</th><th>为何必须在启动后同步</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>max_model_len</code></td><td>Worker profile / auto-fit 后的模型配置</td><td>取前端与 EngineCore 值的最小值</td><td>上下文长度可能因显存被自动缩小。</td></tr>
+              <tr><td><code>num_gpu_blocks</code></td><td>KV cache 配置 / 实际分配结果</td><td>累加到前端 cache config</td><td>只有分配后才知道真实可用 block 数。</td></tr>
+              <tr><td><code>dp_stats_address</code></td><td>DP coordinator / EngineCore</td><td>补全或校验前端 stats 地址</td><td>外部 DP LB 需要在握手后获得统计通道。</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="callout">
+          <strong>顺序保证</strong>
+          <p>ready response 的发送位置在 EngineCore 构造之后，而 EngineCore 构造包含 Executor、Worker、模型加载、KV 初始化与 warmup。因此前端等待到该消息时，HTTP app 还没有开始构建，更不会提前接受推理请求。</p>
+        </div>
+
+        <div class="chapter-nav">
+          <a href="#kv-cache">← KV Cache</a>
+          <a href="#fastapi-app">下一页：FastAPI →</a>
+        </div>
+      </section>
+
+      <section class="chapter" id="fastapi-app" aria-labelledby="fastapi-app-title">
+        <div class="eyebrow"><span class="phase-chip">13 / FASTAPI</span><span>router · middleware · app.state</span></div>
+        <h2 id="fastapi-app-title"><code>build_and_serve</code>：把已就绪引擎挂到 FastAPI</h2>
+
+        <dl class="contract">
+          <div><dt>作用</dt><dd>读取引擎支持的任务类型和模型配置，构建 FastAPI app、注册路由与中间件，并把 EngineClient、模型服务、tokenizer、renderer 等放入 <code>app.state</code>。</dd></div>
+          <div><dt>关键入参</dt><dd><code>engine_client</code>、已 bind 的 <code>sock</code>、<code>listen_address</code>、前端 <code>args</code>、Uvicorn 额外参数。</dd></div>
+          <div><dt>内部处理</dt><dd><code>get_supported_tasks()</code>；<code>build_app()</code> 注册 OpenAI/SageMaker/任务路由与异常处理；<code>init_app_state()</code> 初始化 serving handlers；<code>serve_http()</code> 交给 Uvicorn。</dd></div>
+          <div><dt>返回 / 下一步</dt><dd>返回 Uvicorn 关闭 task；在正常运行时长期等待 server task。下一步由 Uvicorn 接管 socket 并处理请求。</dd></div>
+        </dl>
+
+        <div class="source-line">
+          <a href="../vllm/entrypoints/openai/api_server.py#L578-L623">vllm/entrypoints/openai/api_server.py:578-623</a>
+          <a href="../vllm/entrypoints/openai/api_server.py#L157-L314">vllm/entrypoints/openai/api_server.py:157-314</a>
+          <a href="../vllm/entrypoints/openai/api_server.py#L317-L429">vllm/entrypoints/openai/api_server.py:317-429</a>
+        </div>
+
+        <h3>构建顺序</h3>
+        <div class="call-chain">
+          <div><strong>get_supported_tasks()</strong><span>向 EngineCore 查询 generate/render/pooling 等能力。</span></div>
+          <div><strong>build_app()</strong><span>创建 FastAPI、注册 routers 与 exception handlers。</span></div>
+          <div><strong>init_app_state()</strong><span>保存 engine client、配置、serving model/tokenization/render。</span></div>
+          <div><strong>load_chat_template()</strong><span>解析 CLI 或模型内置 chat template。</span></div>
+          <div><strong>process_lora_modules()</strong><span>合并默认多模态 LoRA 与静态 LoRA。</span></div>
+          <div><strong>serve_http()</strong><span>构造 Uvicorn Server 并使用已 bind 的 socket。</span></div>
+        </div>
+
+        <h3>FastAPI state 中的关键对象</h3>
+        <ul class="plain">
+          <li><code>state.engine_client</code>：所有生成、tokenization、pooling 请求最终回到同一个异步引擎客户端。</li>
+          <li><code>state.vllm_config</code> 与 <code>state.args</code>：请求处理时读取模型限制、默认参数和前端配置。</li>
+          <li><code>state.openai_serving_models</code>：管理模型名、LoRA 与模型注册表。</li>
+          <li><code>state.openai_serving_render</code> 与 <code>state.openai_serving_tokenization</code>：负责输入渲染和 tokenizer 相关接口。</li>
+          <li><code>enable_server_load_tracking</code> 与 <code>server_load_metrics</code>：可选的服务器负载追踪状态。</li>
+        </ul>
+
+        <div class="callout warning">
+          <strong>中间件分支</strong>
+          <p>API key 非空时添加认证中间件；<code>enable_request_id_headers</code> 添加请求 ID 中间件；ScalingMiddleware 始终加入；realtime 任务还会添加 WebSocket metrics。</p>
+        </div>
+
+        <div class="chapter-nav">
+          <a href="#ready-handshake">← ready</a>
+          <a href="#uvicorn">下一页：Uvicorn →</a>
+        </div>
+      </section>
+
+      <section class="chapter" id="uvicorn" aria-labelledby="uvicorn-title">
+        <div class="eyebrow"><span class="phase-chip">14 / LISTEN</span><span>uvicorn.Server.serve(sockets=[sock])</span></div>
+        <h2 id="uvicorn-title"><code>serve_http</code>：HTTP 端口开始接受请求</h2>
+
+        <dl class="contract">
+          <div><dt>作用</dt><dd>把 FastAPI app 包装到 Uvicorn，使用预绑定 socket 启动 HTTP 服务，同时创建 engine watchdog、SSL refresher 和优雅关闭任务。</dd></div>
+          <div><dt>关键入参</dt><dd><code>app</code>、<code>sock</code>、host/port、TLS 参数、keep-alive、access log、H11 header 限制。</dd></div>
+          <div><dt>内部处理</dt><dd>记录路由；创建 <code>uvicorn.Config</code> 并调用 <code>config.load()</code>；创建 <code>uvicorn.Server</code>；启动 watchdog；创建 <code>server.serve(sockets=[sock])</code> task；注册关闭处理。</dd></div>
+          <div><dt>返回 / 下一步</dt><dd>正常运行时等待 server task 直到退出；关闭时取消 watchdog、停止 SSL refresher，并让 engine client 退出。请求开始从 socket 进入 FastAPI。</dd></div>
+        </dl>
+
+        <div class="source-line">
+          <a href="../vllm/entrypoints/launcher.py#L26-L141">vllm/entrypoints/launcher.py:26-141</a>
+          <a href="../vllm/entrypoints/openai/server_utils.py#L446-L473">vllm/entrypoints/openai/server_utils.py:446-473</a>
+          <a href="../vllm/entrypoints/openai/api_server.py#L671-L703">vllm/entrypoints/openai/api_server.py:671-703</a>
+        </div>
+
+        <div class="code-block">
+          <div class="code-head">
+            <span>vllm/entrypoints/launcher.py</span>
+            <a href="../vllm/entrypoints/launcher.py#L71-L82">L71-L82</a>
+          </div>
+          <pre><code><span class="code-line"><span class="ln">71</span><span class="lc">config = uvicorn.Config(app, **uvicorn_kwargs)</span></span>
+<span class="code-line"><span class="ln">72</span><span class="lc"><span class="cm"># Set header limits</span></span></span>
+<span class="code-line"><span class="ln">73</span><span class="lc">config.h11_max_incomplete_event_size = h11_max_incomplete_event_size</span></span>
+<span class="code-line"><span class="ln">74</span><span class="lc">config.h11_max_header_count = h11_max_header_count</span></span>
+<span class="code-line"><span class="ln">75</span><span class="lc">config.load()</span></span>
+<span class="code-line"><span class="ln">76</span><span class="lc">server = uvicorn.Server(config)</span></span>
+<span class="code-line"><span class="ln">77</span><span class="lc">app.state.server = server</span></span>
+<span class="code-line"><span class="ln">78</span><span class="lc"></span></span>
+<span class="code-line"><span class="ln">79</span><span class="lc">loop = asyncio.get_running_loop()</span></span>
+<span class="code-line"><span class="ln">80</span><span class="lc"></span></span>
+<span class="code-line"><span class="ln">81</span><span class="lc">watchdog_task = loop.create_task(watchdog_loop(server, app.state.engine_client))</span></span>
+<span class="code-line"><span class="ln">82</span><span class="lc">server_task = loop.create_task(server.serve(sockets=[sock] <span class="kw">if</span> sock <span class="kw">else</span> <span class="kw">None</span>))</span></span></code></pre>
+        </div>
+
+        <h3>监听期发生的事</h3>
+        <ol class="plain">
+          <li>Uvicorn 接管已经 bind 的 TCP/Unix socket，进入 accept 循环；这是“API 真正可用”的时点。</li>
+          <li>FastAPI lifespan 启动统计日志 task，并调用 <code>freeze_gc_heap()</code>，降低长期服务时 GC stop-the-world 的影响。</li>
+          <li>watchdog 每 5 秒检查 <code>engine.errored and not engine.is_running</code>；默认 <code>VLLM_KEEP_ALIVE_ON_ENGINE_DEATH</code> 未开启时令 server 退出。</li>
+          <li>收到 SIGINT/SIGTERM 后，<code>shutdown_event</code> 触发；先通过 executor 调用 engine client shutdown，再取消 server task 和 watchdog。</li>
+          <li>Uvicorn 退出后，<code>run_server_worker</code> 退出 engine context，最终关闭已绑定 socket。</li>
+        </ol>
+
+        <div class="callout">
+          <strong>与第 03 章的区别</strong>
+          <p><code>setup_server</code> 的 <code>bind</code> 只是保留地址；<code>server.serve</code> 才使 socket 进入监听与 accept 生命周期。日志中的 “Starting vLLM server on ...” 和实际客户端可连接之间，仍隔着 Uvicorn 启动与 lifespan 初始化的极短窗口。</p>
+        </div>
+
+        <div class="chapter-nav">
+          <a href="#fastapi-app">← FastAPI</a>
+          <a href="#branches-errors">下一页：分支与异常 →</a>
+        </div>
+      </section>
+
+      <section class="chapter" id="branches-errors" aria-labelledby="branches-errors-title">
+        <div class="eyebrow"><span class="phase-chip">15 / BRANCHES</span><span>multi-API · headless · failures</span></div>
+        <h2 id="branches-errors-title">分支流程、异常路径与关闭语义</h2>
+
+        <figure class="diagram" aria-labelledby="branch-diagram-title">
+          <h3 id="branch-diagram-title" style="margin-top:0">启动拓扑分支</h3>
+          <div class="branch-tree">
+            <div class="branch-root">ServeSubcommand.cmd(args)</div>
+            <ul class="branch-list">
+              <li>
+                <strong>单 API server</strong>
+                <span><code>api_server_count == 1</code><br>当前进程执行 <code>uvloop.run(run_server(args))</code>。HTTP 与 AsyncMPClient 同进程，EngineCore 通常在后台子进程。</span>
+              </li>
+              <li>
+                <strong>多 API server</strong>
+                <span><code>api_server_count &gt; 1</code><br>launcher 先 bind 一个共享 socket，启动多个 <code>ApiServer_i</code> 子进程；EngineCore 由 launcher 统一管理。</span>
+              </li>
+              <li>
+                <strong>headless / gRPC</strong>
+                <span><code>api_server_count &lt; 1</code> 走 headless engine；<code>--grpc</code> 在更早分支转去 gRPC server。</span>
+              </li>
+            </ul>
+          </div>
+          <figcaption>图：所有分支共享 EngineCore/Executor/Worker 主体，主要差异在 API 进程与前端通信地址由谁管理。</figcaption>
+        </figure>
+
+        <h3>多 API server 路径</h3>
+        <div class="source-line">
+          <a href="../vllm/entrypoints/cli/serve.py#L231-L322">vllm/entrypoints/cli/serve.py:231-322</a>
+          <a href="../vllm/v1/utils.py#L162-L252">vllm/v1/utils.py:162-252</a>
+          <a href="../vllm/v1/engine/utils.py#L916-L951">vllm/v1/engine/utils.py:916-951</a>
+        </div>
+        <ol class="plain">
+          <li><code>run_multi_api_server</code> 先调用 <code>setup_server</code>，因此所有 API server 进程共享同一个已 bind socket。</li>
+          <li><code>get_engine_zmq_addresses</code> 为每个 API server 分配一对 input/output ZMQ 地址。</li>
+          <li><code>launch_core_engines</code> 启动 EngineCore；<code>APIServerProcessManager</code> 用 <code>spawn</code> 启动每个 API 进程，并传入它专属的 <code>client_config</code>。</li>
+          <li>每个子进程运行 <code>run_server_worker</code>；<code>AsyncMPClient</code> 使用外部地址而不是自己创建 EngineCore。</li>
+          <li>父 launcher 通过 <code>wait_for_completion_or_failure</code> 监控 API server、EngineCore 和 DP coordinator。</li>
+        </ol>
+
+        <h3>异常与回退路径表</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>阶段</th><th>触发条件</th><th>代码行为</th><th>结果 / 回退</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>CLI</td><td>external 与 hybrid DP LB 同时设置</td><td><code>raise ValueError</code></td><td>启动前失败。</td></tr>
+              <tr><td>CLI</td><td>headless + 正数 API count</td><td><code>raise ValueError</code></td><td>不启动 API server。</td></tr>
+              <tr><td>Socket</td><td>端口已占用</td><td><code>bind</code> 抛 <code>OSError</code></td><td>不进入 engine 初始化。</td></tr>
+              <tr><td>EngineCore 进程</td><td>子进程在握手前退出</td><td><code>wait_for_engine_startup</code> 抛 <code>RuntimeError</code></td><td>launcher 清理进程。</td></tr>
+              <tr><td>Engine ready</td><td>超过 <code>VLLM_ENGINE_READY_TIMEOUT_S</code></td><td><code>TimeoutError</code>，提示可调大环境变量</td><td>MPClient finalizer 清理资源。</td></tr>
+              <tr><td>Worker 初始化</td><td>某个 WorkerProc 失败</td><td>父 executor 终止其他 worker 并抛错</td><td>EngineCore 失败，前端不进入 listen。</td></tr>
+              <tr><td>模型加载</td><td>CUDA OOM</td><td>记录建议并重新抛出原始 OOM</td><td>没有自动换更小模型；可调参重试。</td></tr>
+              <tr><td>运行时</td><td>EngineCore 异常退出</td><td>发送 <code>ENGINE_CORE_DEAD</code>，monitor 标记 dead</td><td>watchdog 默认让 Uvicorn 退出。</td></tr>
+              <tr><td>关闭</td><td>SIGINT / SIGTERM</td><td>shutdown event → engine shutdown → cancel server/watchdog</td><td>按 <code>shutdown_timeout</code> 优雅退出。</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>headless 分支</h3>
+        <p><code>run_headless</code> 只创建 <code>VllmConfig</code> 和 EngineCore 进程，不构建 FastAPI，也不 bind HTTP socket。多节点非 head-node 可选择 <code>MultiprocExecutor</code> 并进入 worker monitor；head-node 则通过 <code>CoreEngineProcManager</code> 启动本地 DP engine 并监控存活。</p>
+
+        <div class="callout warning">
+          <strong>启动超时不等同于模型损坏</strong>
+          <p>大模型首次加载、编译或从慢速存储读取权重可能超过默认 ready 超时。源码明确提示通过 <code>VLLM_ENGINE_READY_TIMEOUT_S</code> 增大等待时间；这不是自动回退路径。</p>
+        </div>
+
+        <div class="chapter-nav">
+          <a href="#uvicorn">← Uvicorn</a>
+          <a href="#chain-appendix">下一页：完整索引 →</a>
+        </div>
+      </section>
+
+      <section class="chapter" id="chain-appendix" aria-labelledby="chain-appendix-title">
+        <div class="eyebrow"><span class="phase-chip">16 / INDEX</span><span>call chain · source references</span></div>
+        <h2 id="chain-appendix-title">完整调用链与源码索引</h2>
+
+        <h3>默认主链</h3>
+        <div class="call-chain">
+          <div><strong>vllm serve</strong><span><code>pyproject.toml:41-42</code><br><code>vllm.entrypoints.cli.main:main</code></span></div>
+          <div><strong>ServeSubcommand.cmd</strong><span><code>entrypoints/cli/serve.py:42-122</code></span></div>
+          <div><strong>run_server</strong><span><code>entrypoints/openai/api_server.py:671-678</code></span></div>
+          <div><strong>setup_server</strong><span><code>entrypoints/openai/api_server.py:533-575</code></span></div>
+          <div><strong>run_server_worker</strong><span><code>entrypoints/openai/api_server.py:681-703</code></span></div>
+          <div><strong>build_async_engine_client</strong><span><code>entrypoints/openai/api_server.py:77-154</code></span></div>
+          <div><strong>AsyncLLM.from_vllm_config</strong><span><code>v1/engine/async_llm.py:204-231</code></span></div>
+          <div><strong>EngineCoreClient.make_async_mp_client</strong><span><code>v1/engine/core_client.py:105-130</code></span></div>
+          <div><strong>MPClient.__init__</strong><span><code>v1/engine/core_client.py:473-619</code></span></div>
+          <div><strong>launch_core_engines</strong><span><code>v1/engine/utils.py:954-1104</code></span></div>
+          <div><strong>EngineCoreProc.__init__</strong><span><code>v1/engine/core.py:802-980</code></span></div>
+          <div><strong>EngineCore.__init__</strong><span><code>v1/engine/core.py:89-228</code></span></div>
+          <div><strong>Executor.__init__</strong><span><code>v1/executor/abstract.py:94-123</code></span></div>
+          <div><strong>WorkerWrapperBase.init_worker</strong><span><code>v1/worker/worker_base.py:221-305</code></span></div>
+          <div><strong>Worker.init_device</strong><span><code>v1/worker/gpu_worker.py:218-315</code></span></div>
+          <div><strong>Worker.load_model</strong><span><code>v1/worker/gpu_worker.py:318-323</code></span></div>
+          <div><strong>GPUModelRunner.load_model</strong><span><code>v1/worker/gpu_model_runner.py:4746-4905</code></span></div>
+          <div><strong>BaseModelLoader.load_model</strong><span><code>model_executor/model_loader/base_loader.py:42-83</code></span></div>
+          <div><strong>_initialize_kv_caches</strong><span><code>v1/engine/core.py:230-312</code></span></div>
+          <div><strong>EngineCoreReadyResponse</strong><span><code>v1/engine/core.py:1409-1419</code><br><code>v1/engine/core_client.py:667-692</code></span></div>
+          <div><strong>build_and_serve</strong><span><code>entrypoints/openai/api_server.py:578-623</code></span></div>
+          <div><strong>build_app / init_app_state</strong><span><code>entrypoints/openai/api_server.py:157-429</code></span></div>
+          <div><strong>serve_http</strong><span><code>entrypoints/launcher.py:26-141</code></span></div>
+          <div><strong>uvicorn.Server.serve</strong><span><code>entrypoints/launcher.py:76-82</code></span></div>
+        </div>
+
+        <h3>按主题索引</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>主题</th><th>主要源码</th><th>关键行</th><th>对应章节</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>CLI 注册与 dispatch</td><td><code>pyproject.toml</code>、<code>cli/main.py</code></td><td>41-42、16-77</td><td><a href="#cli-entry">01</a></td></tr>
+              <tr><td>API server 拓扑</td><td><code>cli/serve.py</code></td><td>43-122、231-322</td><td><a href="#serve-routing">02</a>、<a href="#branches-errors">15</a></td></tr>
+              <tr><td>预绑定 socket</td><td><code>openai/api_server.py</code></td><td>496-575</td><td><a href="#bind-socket">03</a></td></tr>
+              <tr><td>配置生成</td><td><code>engine/arg_utils.py</code>、<code>config/parallel.py</code></td><td>1424-1432、1567-1624、793-838</td><td><a href="#engine-config">04</a></td></tr>
+              <tr><td>AsyncLLM 与客户端</td><td><code>v1/engine/async_llm.py</code>、<code>core_client.py</code></td><td>73-231、105-130、473-619</td><td><a href="#async-llm">05</a></td></tr>
+              <tr><td>EngineCore 进程</td><td><code>v1/engine/utils.py</code>、<code>core.py</code></td><td>954-1230、802-1143</td><td><a href="#launch-core">06</a>、<a href="#engine-core-proc">07</a></td></tr>
+              <tr><td>Executor/Worker</td><td><code>v1/executor/*</code>、<code>v1/worker/*</code></td><td>102-246、26-61、218-315</td><td><a href="#executor">08</a>、<a href="#worker-init">09</a></td></tr>
+              <tr><td>模型权重</td><td><code>gpu_model_runner.py</code>、<code>model_loader/*</code></td><td>4746-4905、42-83</td><td><a href="#model-load">10</a></td></tr>
+              <tr><td>KV 与 warmup</td><td><code>v1/engine/core.py</code>、<code>gpu_worker.py</code></td><td>230-312、503-590</td><td><a href="#kv-cache">11</a></td></tr>
+              <tr><td>Ready 回传</td><td><code>core.py</code>、<code>core_client.py</code></td><td>1368-1428、577-692</td><td><a href="#ready-handshake">12</a></td></tr>
+              <tr><td>FastAPI 与 Uvicorn</td><td><code>openai/api_server.py</code>、<code>launcher.py</code></td><td>578-703、26-141</td><td><a href="#fastapi-app">13</a>、<a href="#uvicorn">14</a></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>核对与边界</h3>
+        <ul class="plain">
+          <li>本文所有行号对应当前工作树提交 <code>101584af0a8ddf67165fc89cae77ed560fb0096b</code>。</li>
+          <li>默认执行器不是固定为一种：单 GPU world size 为 1 时为 <code>uni</code>；多 GPU 且未显式指定时通常为 <code>mp</code>；Ray placement group 等条件可能进一步改变选择。</li>
+          <li>CPU、XPU、ROCm 会使用不同平台 Worker，但主干仍经过 <code>WorkerWrapperBase</code>、Executor 与 EngineCore；文中设备细节以 CUDA Worker 为示例。</li>
+          <li>gRPC 是 <code>ServeSubcommand.cmd</code> 的早期分叉，本文只标注入口，不展开 gRPC 内部调用链。</li>
+          <li>多 API server 的端口只 bind 一次，由子进程共享 socket；单 API server 则由当前 API 进程 bind 并最终交给 Uvicorn。</li>
+        </ul>
+
+        <div class="chapter-nav">
+          <a href="#branches-errors">← 分支与异常</a>
+          <a class="back-top" href="#overview">回到开头 ↑</a>
+        </div>
+      </section>
+
+      <div class="no-results" id="no-results" role="status">没有匹配的章节。请换一个类名、函数名或源码路径。</div>
+    </main>
+  </div>
+
+  <footer>
+    基于真实源码静态分析生成 · 不修改 vLLM 源码 · 当前提交 <code>101584af0</code>
+  </footer>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const searchInput = document.getElementById("doc-search");
+      const searchCount = document.getElementById("search-count");
+      const noResults = document.getElementById("no-results");
+      const tocToggle = document.getElementById("toc-toggle");
+      const toc = document.getElementById("toc");
+      const blocks = Array.from(document.querySelectorAll(".overview, .chapter"));
+      const tocLinks = Array.from(document.querySelectorAll('#toc a[href^="#"]'));
+      const total = blocks.length;
+
+      const normalize = (value) => value.toLocaleLowerCase("zh-CN").trim();
+
+      const updateSearch = () => {
+        const query = normalize(searchInput ? searchInput.value : "");
+        let visible = 0;
+
+        blocks.forEach((block) => {
+          const haystack = normalize(block.textContent || "");
+          const matches = query === "" || haystack.includes(query);
+          block.classList.toggle("is-filtered", !matches);
+          if (matches) {
+            visible += 1;
+          }
+        });
+
+        tocLinks.forEach((link) => {
+          const id = link.getAttribute("href");
+          const target = id ? document.querySelector(id) : null;
+          const item = link.closest("li");
+          if (item) {
+            item.hidden = Boolean(target && target.classList.contains("is-filtered"));
+          }
+        });
+
+        if (searchCount) {
+          searchCount.textContent = query
+            ? `${visible} / ${total} 章`
+            : `${total} 章`;
+        }
+
+        if (noResults) {
+          noResults.classList.toggle("is-visible", visible === 0);
+        }
+      };
+
+      if (searchInput) {
+        searchInput.addEventListener("input", updateSearch);
+        searchInput.addEventListener("keydown", (event) => {
+          if (event.key === "Escape") {
+            searchInput.value = "";
+            updateSearch();
+          }
+        });
+      }
+
+      if (tocToggle && toc) {
+        tocToggle.addEventListener("click", () => {
+          const open = document.body.classList.toggle("toc-open");
+          tocToggle.setAttribute("aria-expanded", String(open));
+        });
+      }
+
+      tocLinks.forEach((link) => {
+        link.addEventListener("click", () => {
+          document.body.classList.remove("toc-open");
+          if (tocToggle) {
+            tocToggle.setAttribute("aria-expanded", "false");
+          }
+        });
+      });
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          document.body.classList.remove("toc-open");
+          if (tocToggle) {
+            tocToggle.setAttribute("aria-expanded", "false");
+          }
+        }
+      });
+
+      if ("IntersectionObserver" in window) {
+        const observer = new IntersectionObserver((entries) => {
+          const visibleEntries = entries
+            .filter((entry) => entry.isIntersecting)
+            .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
+          if (visibleEntries.length === 0) {
+            return;
+          }
+          const activeId = visibleEntries[0].target.id;
+          tocLinks.forEach((link) => {
+            link.classList.toggle(
+              "is-active",
+              link.getAttribute("href") === `#${activeId}`
+            );
+          });
+        }, {
+          rootMargin: "-18% 0px -68% 0px",
+          threshold: [0, 0.2, 0.5]
+        });
+        blocks.forEach((block) => observer.observe(block));
+      }
+
+      updateSearch();
+    })();
+  </script>
+</body>
+</html>

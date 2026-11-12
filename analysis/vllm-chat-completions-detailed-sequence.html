@@ -1,0 +1,3565 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="基于 vLLM 101584af0 的 Chat Completions 152 步主链与 11 个补充审计分支，逐步包含用途、入参、出参、基础逻辑、下一跳、源码路径和类。">
+  <title>vLLM Chat Completions 详细调用时序图</title>
+  <style>
+    :root {
+      --ink: #17262d;
+      --ink-soft: #40545c;
+      --muted: #6c7d84;
+      --paper: #eef3f4;
+      --surface: #ffffff;
+      --surface-soft: #e8f0f1;
+      --line: #d4e0e2;
+      --nav: #0e2a30;
+      --nav-strong: #081f24;
+      --teal: #176b6a;
+      --teal-soft: #d7eeee;
+      --blue: #2b6590;
+      --blue-soft: #dceaf3;
+      --amber: #99631c;
+      --amber-soft: #f6e8cd;
+      --red: #a44739;
+      --red-soft: #f5dfda;
+      --green: #347452;
+      --green-soft: #dceee4;
+      --violet: #625c92;
+      --violet-soft: #e6e3f1;
+      --shadow: 0 10px 28px rgba(14, 45, 52, 0.08);
+      --radius: 8px;
+      --maxw: 1540px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html {
+      scroll-behavior: smooth;
+      scroll-padding-top: 96px;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+      font-size: 15px;
+      line-height: 1.68;
+    }
+
+    a { color: var(--blue); text-underline-offset: 3px; }
+    a:hover { color: var(--teal); }
+
+    code, pre, .mono {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+
+    code {
+      padding: 0.08em 0.3em;
+      color: #1d4d58;
+      background: #e8f0f1;
+      border-radius: 4px;
+      font-size: 0.92em;
+      overflow-wrap: anywhere;
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    .skip-link {
+      position: fixed;
+      top: -60px;
+      left: 16px;
+      z-index: 1000;
+      padding: 9px 13px;
+      color: #fff;
+      background: var(--teal);
+      border-radius: 6px;
+    }
+
+    .skip-link:focus { top: 10px; }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      color: #eff8f8;
+      background: var(--nav);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+      box-shadow: 0 4px 16px rgba(4, 25, 30, 0.2);
+    }
+
+    .topbar-inner {
+      display: grid;
+      grid-template-columns: minmax(280px, 1fr) minmax(300px, 600px);
+      gap: 24px;
+      align-items: center;
+      width: min(calc(100% - 32px), var(--maxw));
+      min-height: 78px;
+      margin: 0 auto;
+    }
+
+    .brand-kicker {
+      display: block;
+      color: #9ec7c9;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    .brand-title {
+      display: block;
+      margin-top: 2px;
+      overflow: hidden;
+      color: #fff;
+      font-size: 18px;
+      font-weight: 800;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .search-wrap {
+      position: relative;
+    }
+
+    .search-input {
+      width: 100%;
+      min-height: 44px;
+      padding: 9px 92px 9px 40px;
+      color: #fff;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.23);
+      border-radius: 6px;
+      outline: none;
+      font: inherit;
+      font-size: 14px;
+    }
+
+    .search-input::placeholder { color: #c4d8da; }
+
+    .search-input:focus {
+      background: rgba(255, 255, 255, 0.15);
+      border-color: #8bc1c2;
+      box-shadow: 0 0 0 3px rgba(124, 194, 195, 0.18);
+    }
+
+    .search-icon {
+      position: absolute;
+      top: 50%;
+      left: 13px;
+      color: #b5d0d3;
+      pointer-events: none;
+      transform: translateY(-50%);
+    }
+
+    .key-hint {
+      position: absolute;
+      top: 50%;
+      right: 12px;
+      padding: 2px 7px;
+      color: #c8dcde;
+      background: rgba(0, 0, 0, 0.18);
+      border: 1px solid rgba(255, 255, 255, 0.17);
+      border-radius: 4px;
+      font-size: 11px;
+      transform: translateY(-50%);
+    }
+
+    .app-shell {
+      display: grid;
+      grid-template-columns: 278px minmax(0, 1fr);
+      gap: 24px;
+      width: min(calc(100% - 32px), var(--maxw));
+      margin: 26px auto 56px;
+      align-items: start;
+    }
+
+    .sidebar {
+      position: sticky;
+      top: 100px;
+      max-height: calc(100vh - 122px);
+      padding: 16px 14px 18px;
+      overflow-y: auto;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+
+    .sidebar-title {
+      margin: 0 0 10px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .stage-nav {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .stage-nav li + li { margin-top: 3px; }
+
+    .stage-nav a {
+      display: grid;
+      grid-template-columns: 24px minmax(0, 1fr);
+      gap: 7px;
+      padding: 7px 8px;
+      color: var(--ink-soft);
+      border-left: 3px solid transparent;
+      border-radius: 0 5px 5px 0;
+      font-size: 12px;
+      line-height: 1.35;
+      text-decoration: none;
+    }
+
+    .stage-nav a:hover {
+      color: var(--teal);
+      background: var(--surface-soft);
+    }
+
+    .stage-nav a.active {
+      color: var(--teal);
+      background: var(--teal-soft);
+      border-left-color: var(--teal);
+      font-weight: 800;
+    }
+
+    .nav-num {
+      color: var(--muted);
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 10px;
+      font-weight: 800;
+      text-align: right;
+    }
+
+    .main { min-width: 0; }
+
+    .hero {
+      overflow: hidden;
+      color: #eff8f8;
+      background: var(--nav-strong);
+      border: 1px solid #173b43;
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+
+    .hero-main {
+      padding: 34px 38px 30px;
+    }
+
+    .eyebrow {
+      margin: 0 0 9px;
+      color: #8ec4c6;
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      max-width: 980px;
+      margin: 0;
+      color: #fff;
+      font-size: clamp(28px, 3.1vw, 44px);
+      line-height: 1.17;
+      letter-spacing: 0;
+    }
+
+    .hero-lead {
+      max-width: 980px;
+      margin: 15px 0 0;
+      color: #c9dcde;
+      font-size: 15px;
+    }
+
+    .hero-stats {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 1px;
+      background: #294a51;
+      border-top: 1px solid #274850;
+    }
+
+    .stat {
+      padding: 13px 18px;
+      background: #0e2a30;
+    }
+
+    .stat-label {
+      display: block;
+      color: #91b6b9;
+      font-size: 10px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .stat-value {
+      display: block;
+      margin-top: 2px;
+      color: #fff;
+      font-size: 14px;
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+
+    .control-panel {
+      margin-top: 18px;
+      padding: 16px 18px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+
+    .control-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .control-label {
+      margin-right: 3px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .filter-btn {
+      min-height: 31px;
+      padding: 5px 10px;
+      color: var(--ink-soft);
+      background: #f6f9f9;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      font: inherit;
+      font-size: 11px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    .filter-btn:hover { background: var(--surface-soft); }
+
+    .filter-btn[aria-pressed="true"] {
+      color: #fff;
+      background: var(--teal);
+      border-color: var(--teal);
+    }
+
+    .filter-btn:focus-visible {
+      outline: 3px solid #9fd2d3;
+      outline-offset: 2px;
+    }
+
+    .result-summary {
+      margin-left: auto;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 12px;
+    }
+
+    .mode-tag {
+      display: inline-flex;
+      min-height: 24px;
+      padding: 2px 8px;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 10px;
+      font-weight: 800;
+      line-height: 1.2;
+      white-space: nowrap;
+    }
+
+    .mode-http { color: #2f4650; background: #e7edef; border-color: #c8d5d9; }
+    .mode-async, .mode-async_gen { color: #285e43; background: var(--green-soft); border-color: #b9dfc8; }
+    .mode-sync { color: #214f70; background: var(--blue-soft); border-color: #bbd6e7; }
+    .mode-thread { color: #785014; background: var(--amber-soft); border-color: #e9ce9d; }
+    .mode-ipc { color: #514b7e; background: var(--violet-soft); border-color: #cdc8e1; }
+    .mode-gpu { color: #843d32; background: var(--red-soft); border-color: #e5bcb3; }
+    .mode-sse { color: #145c5c; background: var(--teal-soft); border-color: #b2dedd; }
+
+    .stage-section {
+      margin-top: 20px;
+      scroll-margin-top: 96px;
+    }
+
+    .stage-heading {
+      display: grid;
+      grid-template-columns: 46px minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      padding: 13px 16px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-left: 5px solid var(--teal);
+      border-radius: var(--radius) var(--radius) 0 0;
+      box-shadow: var(--shadow);
+    }
+
+    .stage-heading:nth-of-type(2n) { border-left-color: var(--blue); }
+
+    .stage-number {
+      display: inline-grid;
+      width: 32px;
+      height: 32px;
+      place-items: center;
+      color: #fff;
+      background: var(--teal);
+      border-radius: 50%;
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .stage-heading h2 {
+      margin: 0;
+      color: var(--ink);
+      font-size: 18px;
+      line-height: 1.35;
+      letter-spacing: 0;
+    }
+
+    .stage-tech {
+      color: var(--muted);
+      font-size: 11px;
+      text-align: right;
+    }
+
+    .step-list {
+      display: grid;
+      gap: 10px;
+      padding: 12px 0 0;
+    }
+
+    .step-card {
+      scroll-margin-top: 98px;
+      overflow: hidden;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-left: 5px solid var(--blue);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+
+    .step-card.mode-async, .step-card.mode-async_gen {
+      border-left-color: var(--green);
+    }
+
+    .step-card.mode-thread { border-left-color: var(--amber); }
+    .step-card.mode-ipc { border-left-color: var(--violet); }
+    .step-card.mode-gpu { border-left-color: var(--red); }
+    .step-card.mode-sse { border-left-color: var(--teal); }
+    .step-card.mode-http { border-left-color: #52707a; }
+
+    .step-head {
+      display: grid;
+      grid-template-columns: 52px minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: start;
+      padding: 14px 16px 12px;
+      background: #fbfcfc;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .step-no {
+      color: var(--muted);
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 12px;
+      font-weight: 800;
+      text-align: center;
+    }
+
+    .call-direction {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+    }
+
+    .call-direction b {
+      display: block;
+      margin-top: 2px;
+      color: var(--ink);
+      font-size: 14px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+
+    .step-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      justify-content: flex-end;
+    }
+
+    .stage-chip {
+      display: inline-flex;
+      min-height: 24px;
+      padding: 2px 8px;
+      align-items: center;
+      color: var(--ink-soft);
+      background: var(--surface-soft);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .source-strip {
+      display: grid;
+      grid-template-columns: minmax(0, 1.9fr) minmax(130px, 0.8fr) minmax(180px, 1.2fr) auto;
+      gap: 8px 12px;
+      align-items: center;
+      padding: 10px 16px;
+      color: var(--ink-soft);
+      background: #f3f7f7;
+      border-bottom: 1px solid var(--line);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .source-strip b {
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 800;
+    }
+
+    .source-path, .source-symbol {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      overflow-wrap: anywhere;
+    }
+
+    .source-class { overflow-wrap: anywhere; }
+
+    .source-link {
+      justify-self: end;
+      padding: 4px 8px;
+      color: #155b5b;
+      background: var(--teal-soft);
+      border: 1px solid #b7dedd;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 800;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+
+    .source-missing {
+      color: var(--muted);
+      font-style: italic;
+    }
+
+    .detail-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .detail-cell {
+      padding: 13px 16px;
+      border-right: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .detail-cell:nth-child(2n) { border-right: 0; }
+
+    .detail-cell.logic-cell {
+      grid-column: 1 / -1;
+      border-right: 0;
+      border-bottom: 0;
+      background: #fcfdfd;
+    }
+
+    .detail-label {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--teal);
+      font-size: 10px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .detail-text {
+      margin: 0;
+      color: var(--ink-soft);
+      font-size: 13px;
+      line-height: 1.65;
+    }
+
+    .detail-text code { font-size: 0.91em; }
+
+    .empty-state {
+      margin-top: 20px;
+      padding: 28px;
+      color: var(--muted);
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      text-align: center;
+    }
+
+    .footer-note {
+      margin-top: 24px;
+      padding: 16px 18px;
+      color: var(--muted);
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      font-size: 12px;
+    }
+
+    .back-top {
+      position: fixed;
+      right: 22px;
+      bottom: 22px;
+      z-index: 90;
+      display: none;
+      width: 42px;
+      height: 42px;
+      color: #fff;
+      background: var(--teal);
+      border: 0;
+      border-radius: 50%;
+      box-shadow: 0 6px 18px rgba(17, 79, 81, 0.3);
+      cursor: pointer;
+      font-size: 19px;
+    }
+
+    .back-top.visible { display: block; }
+
+    .back-top:focus-visible {
+      outline: 3px solid #9ed0d1;
+      outline-offset: 3px;
+    }
+
+    .mobile-stage-nav {
+      display: none;
+      margin-top: 14px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+    }
+
+    .mobile-stage-nav summary {
+      padding: 12px 14px;
+      color: var(--ink);
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    .mobile-stage-nav .stage-nav {
+      padding: 0 12px 12px;
+    }
+
+    @media (max-width: 1080px) {
+      .topbar-inner {
+        grid-template-columns: 1fr;
+        gap: 10px;
+        padding: 12px 0;
+      }
+
+      .app-shell { grid-template-columns: 1fr; }
+      .sidebar { display: none; }
+      .mobile-stage-nav { display: block; }
+
+      .hero-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+      .source-strip {
+        grid-template-columns: minmax(0, 1.7fr) minmax(120px, 0.8fr) minmax(160px, 1fr);
+      }
+
+      .source-link {
+        grid-column: 1 / -1;
+        justify-self: start;
+      }
+    }
+
+    @media (max-width: 720px) {
+      body { font-size: 14px; }
+
+      .topbar-inner, .app-shell {
+        width: min(calc(100% - 20px), var(--maxw));
+      }
+
+      .brand-title { font-size: 15px; }
+
+      .hero-main { padding: 26px 20px 24px; }
+      .hero h1 { font-size: 28px; }
+      .hero-lead { font-size: 14px; }
+
+      .control-panel { padding: 13px; }
+      .result-summary { width: 100%; margin-left: 0; }
+
+      .stage-heading {
+        grid-template-columns: 36px minmax(0, 1fr);
+        padding: 12px;
+      }
+
+      .stage-tech {
+        grid-column: 2;
+        text-align: left;
+      }
+
+      .step-head {
+        grid-template-columns: 38px minmax(0, 1fr);
+        padding: 12px;
+      }
+
+      .step-tags {
+        grid-column: 2;
+        justify-content: flex-start;
+      }
+
+      .source-strip {
+        grid-template-columns: 1fr;
+        padding: 10px 12px;
+      }
+
+      .source-link {
+        grid-column: 1;
+        justify-self: start;
+      }
+
+      .detail-grid { grid-template-columns: 1fr; }
+      .detail-cell { border-right: 0; }
+      .detail-cell.logic-cell { grid-column: 1; }
+    }
+
+    @media print {
+      body { background: #fff; font-size: 10pt; }
+      .topbar, .sidebar, .mobile-stage-nav, .control-panel,
+      .back-top, .skip-link { display: none !important; }
+      .app-shell { display: block; width: 100%; margin: 0; }
+      .hero, .step-card, .stage-heading { box-shadow: none; }
+      .step-card, .detail-cell, .source-strip { break-inside: avoid; }
+      .stage-section { margin-top: 12pt; }
+      a { color: #111; }
+    }
+
+    /* Reference-style sequence layout */
+    :root {
+      --bg: #f3f6f4;
+      --surface-2: #edf2ef;
+      --surface-3: #e2eae6;
+      --text: #15211d;
+      --border-strong: #aebfb8;
+      --accent: #08766b;
+      --accent-soft: #d8f0ea;
+      --blue-soft: #e2ebf6;
+      --orange: #a95420;
+      --orange-soft: #f7e7db;
+      --yellow: #86660a;
+      --yellow-soft: #f5edc9;
+      --code-bg: #16201c;
+      --font: "Noto Sans CJK SC", "Source Han Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #101613;
+        --surface: #18211e;
+        --surface-2: #202b27;
+        --surface-3: #293630;
+        --text: #e9f0ec;
+        --ink: #e9f0ec;
+        --ink-soft: #c5d2cd;
+        --muted: #abb9b3;
+        --border: #34443d;
+        --border-strong: #4b5f56;
+        --accent: #63c9ba;
+        --accent-soft: #173e37;
+        --blue: #93bdec;
+        --blue-soft: #1b3148;
+        --orange: #e69b68;
+        --orange-soft: #432a1c;
+        --green: #93dbb2;
+        --green-soft: #1b3b2a;
+        --red: #f1a1a1;
+        --red-soft: #472323;
+        --yellow: #e5ce7d;
+        --yellow-soft: #3f3719;
+        --teal: #63c9ba;
+        --teal-soft: #173e37;
+        --violet: #b7afe7;
+        --violet-soft: #302c4a;
+        --code-bg: #0a100d;
+      }
+    }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 16px;
+    }
+    button, input { font: inherit; }
+    button:focus-visible, input:focus-visible, a:focus-visible {
+      outline: 3px solid color-mix(in srgb, var(--accent) 58%, transparent);
+      outline-offset: 2px;
+    }
+    .skip-link {
+      position: absolute; left: 12px; top: -70px; z-index: 100;
+      padding: 8px 12px; border: 1px solid var(--border-strong);
+      border-radius: 8px; background: var(--surface); color: var(--text);
+    }
+    .skip-link:focus { top: 12px; }
+    .topbar {
+      position: sticky; top: 0; z-index: 50;
+      display: grid; grid-template-columns: minmax(240px, 1fr) minmax(280px, 560px);
+      gap: 22px; align-items: center; min-height: 64px; padding: 10px 26px;
+      background: color-mix(in srgb, var(--surface) 93%, transparent);
+      border-bottom: 1px solid var(--border);
+      box-shadow: none;
+      backdrop-filter: blur(14px);
+    }
+    .brand { display: flex; gap: 12px; align-items: center; min-width: 0; }
+    .brand-mark {
+      display: grid; flex: 0 0 34px; height: 34px; place-items: center;
+      border: 1px solid var(--border-strong); border-radius: 8px;
+      background: var(--surface-2); color: var(--accent);
+      font-family: var(--mono); font-size: 12px; font-weight: 700;
+    }
+    .brand-copy { min-width: 0; }
+    .brand-title {
+      display: block; overflow: hidden; font-size: 15px; font-weight: 700;
+      line-height: 1.3; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .brand-sub { display: block; color: var(--muted); font-size: 11px; line-height: 1.4; }
+    .search {
+      display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; gap: 8px;
+      align-items: center; padding: 8px 11px; border: 1px solid var(--border);
+      border-radius: 8px; background: var(--surface-2);
+    }
+    .search:focus-within { border-color: var(--accent); }
+    .search svg { width: 18px; height: 18px; color: var(--muted); }
+    .search input {
+      width: 100%; border: 0; outline: 0; background: transparent;
+      color: var(--text); font-size: 14px;
+    }
+    .search input::placeholder { color: var(--muted); }
+    .search-count { color: var(--muted); font-family: var(--mono); font-size: 10px; white-space: nowrap; }
+    .shell {
+      display: grid; grid-template-columns: 270px minmax(0, 1fr);
+      max-width: 1540px; margin: 0 auto;
+    }
+    .sidebar {
+      position: sticky; top: 64px; align-self: start; max-height: calc(100vh - 64px);
+      padding: 24px 18px 30px 26px; overflow-y: auto;
+      background: transparent; border: 0; border-radius: 0; box-shadow: none;
+    }
+    .sidebar-title {
+      margin: 0 0 12px; color: var(--muted); font-size: 11px;
+      font-weight: 700; text-transform: uppercase;
+    }
+    .phase-nav { display: grid; gap: 4px; }
+    .phase-nav a {
+      display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; gap: 8px;
+      align-items: center; padding: 8px 9px; border-left: 2px solid transparent;
+      border-radius: 0 6px 6px 0; color: var(--muted); text-decoration: none;
+    }
+    .phase-nav a:hover { background: var(--surface-2); color: var(--text); }
+    .phase-nav a.is-active,
+    .phase-nav a.active {
+      border-left-color: var(--accent); background: var(--accent-soft); color: var(--text);
+    }
+    .phase-nav span {
+      color: var(--accent); font-family: var(--mono); font-size: 10px; font-weight: 700;
+      text-align: right;
+    }
+    .phase-nav strong { font-size: 12px; font-weight: 650; line-height: 1.4; }
+    .phase-nav em {
+      color: var(--muted); font-family: var(--mono); font-size: 9px; font-style: normal;
+    }
+    .legend { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border); }
+    .legend p { margin: 0 0 9px; color: var(--muted); font-size: 11px; }
+    .legend-list { display: flex; flex-wrap: wrap; gap: 6px; }
+    .filter-panel {
+      position: sticky; top: 64px; z-index: 30; display: flex; flex-wrap: wrap;
+      gap: 8px; align-items: center; padding: 10px 0 12px;
+      background: color-mix(in srgb, var(--bg) 94%, transparent);
+      border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(10px);
+    }
+    .filter-btn {
+      min-height: 30px; padding: 3px 9px; border: 1px solid var(--border);
+      border-radius: 5px; background: var(--surface); color: var(--muted);
+      font-family: var(--mono); font-size: 10px; cursor: pointer;
+    }
+    .filter-btn:hover { border-color: var(--border-strong); color: var(--text); }
+    .filter-btn[aria-pressed="true"] {
+      border-color: var(--accent); background: var(--accent-soft); color: var(--accent);
+    }
+    .filter-note { margin-left: auto; color: var(--muted); font-size: 11px; }
+    .main { min-width: 0; padding: 0 36px 74px; }
+    .intro {
+      max-width: 1120px; margin: 0 auto; padding: 42px 0 34px;
+      border-bottom: 1px solid var(--border);
+    }
+    .eyebrow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
+    .chip {
+      display: inline-flex; align-items: center; min-height: 26px; padding: 2px 8px;
+      border: 1px solid var(--border); border-radius: 999px;
+      background: var(--surface-2); color: var(--muted);
+      font-family: var(--mono); font-size: 10px;
+    }
+    h1 {
+      max-width: 950px; margin: 0 0 15px;
+      font-size: clamp(32px, 4vw, 52px); line-height: 1.16; letter-spacing: 0;
+      color: var(--text);
+    }
+    .intro p { max-width: 940px; margin: 0; color: var(--muted); font-size: 17px; }
+    .summary-strip {
+      display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px;
+      margin-top: 24px; overflow: hidden; border: 1px solid var(--border);
+      border-radius: 8px; background: var(--border);
+    }
+    .summary-strip div { padding: 12px 14px; background: var(--surface); }
+    .summary-strip strong {
+      display: block; font-family: var(--mono); font-size: 18px; color: var(--text);
+      overflow-wrap: anywhere;
+    }
+    .summary-strip span { color: var(--muted); font-size: 11px; }
+    .stage-section.phase {
+      max-width: 1120px; margin: 0 auto; padding: 38px 0 12px;
+      border-bottom: 1px solid var(--border); scroll-margin-top: 120px;
+    }
+    .phase-header {
+      display: grid; grid-template-columns: 48px minmax(0, 1fr); gap: 14px;
+      align-items: start; margin-bottom: 18px;
+    }
+    .phase-letter {
+      display: grid; width: 44px; height: 44px; place-items: center;
+      border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border));
+      border-radius: 7px; background: var(--accent-soft); color: var(--accent);
+      font-family: var(--mono); font-size: 14px; font-weight: 700;
+    }
+    .phase-kicker {
+      margin: 0 0 3px; color: var(--accent);
+      font-family: var(--mono); font-size: 10px;
+    }
+    .phase h2 { margin: 0; font-size: 27px; line-height: 1.2; color: var(--text); }
+    .phase-header p:last-child { margin: 5px 0 0; color: var(--muted); font-size: 13px; }
+    .step-list { display: grid; gap: 0; }
+    .step-card,
+    .step {
+      display: grid; grid-template-columns: 58px minmax(0, 1fr);
+      border-top: 1px solid var(--border); border-left: 0; border-radius: 0;
+      background: transparent; box-shadow: none; scroll-margin-top: 120px;
+    }
+    .step-card:last-child,
+    .step:last-child { border-bottom: 1px solid var(--border); }
+    .step-rail {
+      position: relative; display: flex; flex-direction: column; align-items: center;
+      padding-top: 17px;
+    }
+    .step-number {
+      position: relative; z-index: 1; display: grid; width: 34px; height: 26px;
+      place-items: center; border: 1px solid var(--border-strong); border-radius: 5px;
+      background: var(--surface); color: var(--muted);
+      font-family: var(--mono); font-size: 10px; font-weight: 700;
+    }
+    .rail-line {
+      width: 1px; flex: 1; min-height: 28px; margin-top: 5px;
+      background: var(--border-strong);
+    }
+    .step-card:last-child .rail-line,
+    .step:last-child .rail-line { background: transparent; }
+    .step-body { min-width: 0; padding: 16px 0 20px 4px; }
+    .step-header {
+      display: flex; justify-content: space-between; gap: 18px; align-items: flex-start;
+    }
+    .step-kicker {
+      margin-bottom: 3px; color: var(--muted);
+      font-family: var(--mono); font-size: 9px;
+    }
+    .step h3,
+    .step-body h3 { margin: 0; font-size: 18px; line-height: 1.35; color: var(--text); }
+    .step-status { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+    .mode {
+      display: inline-flex; align-items: center; min-height: 22px; padding: 1px 6px;
+      border: 1px solid var(--border-strong); border-radius: 4px;
+      background: var(--surface-2); color: var(--muted);
+      font-family: var(--mono); font-size: 9px; font-weight: 700; white-space: nowrap;
+    }
+    .mode-sync {
+      border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+      background: var(--accent-soft); color: var(--accent);
+    }
+    .mode-async, .mode-async_gen {
+      border-color: color-mix(in srgb, var(--blue) 40%, var(--border));
+      background: var(--blue-soft); color: var(--blue);
+    }
+    .mode-thread {
+      border-color: color-mix(in srgb, var(--green) 40%, var(--border));
+      background: var(--green-soft); color: var(--green);
+    }
+    .mode-ipc {
+      border-color: color-mix(in srgb, var(--red) 35%, var(--border));
+      background: var(--red-soft); color: var(--red);
+    }
+    .mode-gpu {
+      border-color: color-mix(in srgb, var(--orange) 40%, var(--border));
+      background: var(--orange-soft); color: var(--orange);
+    }
+    .mode-sse {
+      border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+      background: var(--accent-soft); color: var(--accent);
+    }
+    .mode-http {
+      border-color: var(--border-strong);
+      background: var(--surface-3); color: var(--muted);
+    }
+    .call-path {
+      display: grid; grid-template-columns: minmax(120px, auto) minmax(120px, 1fr) minmax(120px, auto);
+      gap: 10px; align-items: center; margin: 14px 0 10px;
+    }
+    .actor {
+      display: inline-flex; justify-self: start; max-width: 100%; padding: 4px 8px;
+      border: 1px solid var(--border); border-radius: 4px;
+      background: var(--surface-2); color: var(--text);
+      font-family: var(--mono); font-size: 10px; line-height: 1.3;
+    }
+    .actor-http { border-color: color-mix(in srgb, var(--accent) 38%, var(--border)); background: var(--accent-soft); }
+    .actor-async, .actor-async_gen { border-color: color-mix(in srgb, var(--blue) 38%, var(--border)); background: var(--blue-soft); }
+    .actor-thread { border-color: color-mix(in srgb, var(--green) 38%, var(--border)); background: var(--green-soft); }
+    .actor-ipc { border-color: color-mix(in srgb, var(--red) 35%, var(--border)); background: var(--red-soft); }
+    .actor-gpu { border-color: color-mix(in srgb, var(--orange) 38%, var(--border)); background: var(--orange-soft); }
+    .actor-sse { border-color: color-mix(in srgb, var(--accent) 38%, var(--border)); background: var(--accent-soft); }
+    .call-edge { position: relative; display: flex; align-items: center; min-width: 0; height: 22px; }
+    .edge-line { width: 100%; height: 1px; background: var(--border-strong); }
+    .edge-mode {
+      position: absolute; left: 50%; top: 50%; padding: 1px 5px;
+      background: var(--bg); color: var(--muted);
+      font-family: var(--mono); font-size: 8px;
+      transform: translate(-50%, -50%); white-space: nowrap;
+    }
+    .edge-head { margin-left: -2px; color: var(--accent); font-size: 22px; line-height: 1; }
+    .purpose { margin: 8px 0 12px; color: var(--text); font-size: 13px; }
+    .field-label {
+      display: inline-flex; margin-right: 7px; padding: 1px 5px;
+      border: 1px solid var(--border); border-radius: 3px;
+      background: var(--surface-2); color: var(--muted);
+      font-family: var(--mono); font-size: 9px; font-weight: 700;
+    }
+    .step-grid {
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px;
+      overflow: hidden; border: 1px solid var(--border); border-radius: 6px;
+      background: var(--border);
+    }
+    .step-grid section { padding: 11px 12px; background: var(--surface); }
+    .logic-block, .next-block { grid-column: auto; }
+    .next-block { background: color-mix(in srgb, var(--accent-soft) 42%, var(--surface)); }
+    .step-grid h4 {
+      margin: 0 0 5px; color: var(--accent); font-size: 10px;
+      text-transform: uppercase;
+    }
+    .step-grid p { margin: 0; color: var(--text); font-size: 12px; line-height: 1.55; }
+    .step-grid ol {
+      margin: 0; padding-left: 18px; color: var(--text);
+      font-size: 12px; line-height: 1.55;
+    }
+    .step-grid li + li { margin-top: 4px; }
+    .source-bar {
+      display: flex; flex-wrap: wrap; gap: 7px 12px; align-items: center;
+      margin-top: 9px; padding-top: 9px; border-top: 1px dashed var(--border);
+      color: var(--muted); font-size: 10px;
+    }
+    .source-item { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; min-width: 0; }
+    .source-label {
+      padding: 0 5px; border: 1px solid var(--border); border-radius: 3px;
+      background: var(--surface-2); font-family: var(--mono); font-size: 8px; font-weight: 700;
+    }
+    .source-item code {
+      padding: 0; background: transparent; color: var(--text);
+      font-size: 9px; overflow-wrap: anywhere; word-break: break-all;
+    }
+    .source-link {
+      margin-left: auto; font-family: var(--mono); font-size: 9px;
+      font-weight: 700; text-decoration: none; white-space: nowrap;
+      color: var(--accent); background: transparent; border: 0; padding: 0;
+    }
+    .source-link:hover { text-decoration: underline; }
+    .source-actions {
+      display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+      margin-left: auto;
+    }
+    .source-actions .source-link { margin-left: 0; }
+    .empty-state, .no-results {
+      display: none; max-width: 700px; margin: 50px auto; padding: 24px;
+      border: 1px dashed var(--border-strong); color: var(--muted); text-align: center;
+    }
+    .empty-state:not([hidden]), .no-results.is-visible { display: block; }
+    .page-footer {
+      max-width: 1120px; margin: 0 auto; padding: 28px 36px 42px;
+      color: var(--muted); font-size: 11px; text-align: center;
+      background: transparent; border: 0;
+    }
+    .mobile-stage-nav {
+      display: none; margin: 18px 0 0; background: var(--surface);
+      border: 1px solid var(--border); border-radius: 8px;
+    }
+    .mobile-stage-nav summary {
+      padding: 11px 13px; color: var(--text); font-weight: 700; cursor: pointer;
+    }
+    .mobile-stage-nav .phase-nav { padding: 0 12px 12px; }
+    @media (max-width: 1080px) {
+      .shell { grid-template-columns: 232px minmax(0, 1fr); }
+      .summary-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .call-path { grid-template-columns: minmax(100px, auto) minmax(90px, 1fr) minmax(100px, auto); }
+    }
+    @media (max-width: 800px) {
+      .topbar {
+        grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 10px 14px;
+      }
+      .brand-mark { display: none; }
+      .search { grid-row: 2; }
+      .shell { display: block; }
+      .sidebar { display: none; }
+      .mobile-stage-nav { display: block; }
+      .filter-panel { top: 106px; }
+      .main { padding-inline: 18px; }
+      .intro { padding-top: 34px; }
+      .phase { scroll-margin-top: 168px; }
+      .step { scroll-margin-top: 168px; }
+      .step-grid { grid-template-columns: 1fr; }
+      .logic-block { grid-column: auto; }
+      .source-link { margin-left: 0; }
+      .source-actions { width: 100%; justify-content: flex-start; margin-left: 0; }
+    }
+    @media (max-width: 520px) {
+      h1 { font-size: 31px; }
+      .search-count { display: none; }
+      .summary-strip { grid-template-columns: 1fr 1fr; }
+      .step { grid-template-columns: 42px minmax(0, 1fr); }
+      .step-number { width: 30px; font-size: 9px; }
+      .step-header { display: block; }
+      .step-status { justify-content: flex-start; margin-top: 8px; }
+      .call-path { display: grid; grid-template-columns: 1fr; gap: 5px; }
+      .call-edge { height: 16px; }
+      .edge-mode { left: 10px; transform: translateY(-50%); }
+      .edge-head { display: none; }
+      .actor { justify-self: stretch; }
+      .step-grid section { padding: 10px; }
+      .filter-note { width: 100%; margin-left: 0; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+      }
+    }
+    @media print {
+      .topbar, .sidebar, .filter-panel, .source-link { display: none !important; }
+      .shell { display: block; }
+      .main { padding: 0; }
+      .intro, .phase { max-width: none; break-inside: auto; }
+      .step { break-inside: avoid; }
+      body { background: #fff; color: #000; font-size: 10pt; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#timeline">跳到调用时序</a>
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">SEQ</div>
+      <div class="brand-copy">
+        <span class="brand-title">vLLM Chat Completions 全时序</span>
+        <span class="brand-sub">163 calls · commit 101584af0 · source-linked</span>
+      </div>
+    </div>
+    <label class="search" for="step-search">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <circle cx="11" cy="11" r="7"></circle>
+        <path d="m20 20-3.8-3.8"></path>
+      </svg>
+      <input id="step-search" type="search" autocomplete="off"
+        placeholder="搜索函数、类、入参、出参、逻辑、源码路径…">
+      <span class="search-count" id="search-count" aria-live="polite">163 calls</span>
+    </label>
+  </header>
+
+  <div class="shell">
+    <aside class="sidebar" aria-label="阶段导航">
+      <p class="sidebar-title">Sequence phases</p>
+      <nav id="stage-nav" class="phase-nav"></nav>
+      <div class="legend">
+        <p>调用类型</p>
+        <div class="legend-list">
+          <span class="mode mode-http">HTTP</span>
+          <span class="mode mode-async">ASYNC</span>
+          <span class="mode mode-async_gen">ASYNC GEN</span>
+          <span class="mode mode-sync">SYNC</span>
+          <span class="mode mode-thread">THREAD</span>
+          <span class="mode mode-ipc">IPC</span>
+          <span class="mode mode-gpu">GPU</span>
+          <span class="mode mode-sse">SSE</span>
+        </div>
+      </div>
+    </aside>
+
+    <main id="timeline" class="main">
+      <section class="intro">
+        <div class="eyebrow">
+          <span class="chip">FULL SEQUENCE</span>
+          <span class="chip">101584af0a8ddf67165fc89cae77ed560fb0096b</span>
+          <span class="chip">SOURCE-LINKED</span>
+        </div>
+        <h1>从 HTTP 入站到模型采样与 SSE/JSON 返回的完整调用时序</h1>
+        <p>
+          每一步都列出调用方向、同步/异步类型、绝对源码路径、类/模块、行号、用途、入参、出参和基础逻辑。
+          与参考文档一致，采用连续时间轴、阶段导航和源码追踪结构。代码条提供 Zed/Cursor 精确行号深链接与原始文件链接。
+        </p>
+        <div class="summary-strip">
+          <div><strong id="stat-steps">163</strong><span>调用步骤</span></div>
+          <div><strong>10</strong><span>执行阶段</span></div>
+          <div><strong>8</strong><span>调用类型</span></div>
+          <div><strong>/opt/work/codes/github/vllm</strong><span>源码仓库</span></div>
+        </div>
+      </section>
+
+      <details class="mobile-stage-nav">
+        <summary>阶段导航</summary>
+        <nav id="mobile-stage-nav" class="phase-nav"></nav>
+      </details>
+
+      <div class="filter-panel" id="mode-filters" aria-label="时序图过滤器">
+          <button class="filter-btn" type="button" data-mode="all" aria-pressed="true">全部</button>
+          <button class="filter-btn" type="button" data-mode="http" aria-pressed="false">HTTP</button>
+          <button class="filter-btn" type="button" data-mode="async" aria-pressed="false">ASYNC</button>
+          <button class="filter-btn" type="button" data-mode="async_gen" aria-pressed="false">ASYNC GEN</button>
+          <button class="filter-btn" type="button" data-mode="sync" aria-pressed="false">SYNC</button>
+          <button class="filter-btn" type="button" data-mode="thread" aria-pressed="false">THREAD</button>
+          <button class="filter-btn" type="button" data-mode="ipc" aria-pressed="false">IPC</button>
+          <button class="filter-btn" type="button" data-mode="gpu" aria-pressed="false">GPU</button>
+          <button class="filter-btn" type="button" data-mode="sse" aria-pressed="false">SSE</button>
+          <span id="result-summary" class="filter-note" role="status" aria-live="polite"></span>
+      </div>
+
+      <div id="timeline-content"></div>
+      <div id="empty-state" class="empty-state" hidden>没有匹配当前搜索与筛选条件的步骤。</div>
+
+      <footer class="page-footer">
+        本文只读取源码并生成静态 HTML，不修改 vLLM 源码。
+        行号基于上面记录的提交快照；源码更新后应重新核对函数位置。
+      </footer>
+    </main>
+  </div>
+
+  <button id="back-top" class="back-top" type="button" aria-label="返回顶部">↑</button>
+
+  <noscript>
+    <p style="padding:16px;background:#f6e8cd;color:#492f0a;">
+      此页面使用内嵌 JavaScript 渲染 152 个主链步骤与 11 个补充分支；请启用 JavaScript。
+    </p>
+  </noscript>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const REPO_ROOT = "/opt/work/codes/github/vllm";
+      const EDITOR_SCHEMES = [
+        { scheme: "zed", label: "Zed" },
+        { scheme: "cursor", label: "Cursor" }
+      ];
+
+      const STAGES = [
+        [1, "HTTP 入站与协议解析", "api_router.py · api_server.py · protocol.py"],
+        [2, "OpenAI 服务与预处理策略", "chat_completion/serving.py · serve/render/serving.py"],
+        [3, "Renderer：模板、媒体与 tokenization", "renderers/* · chat_utils.py · async_utils.py"],
+        [4, "参数化与生成器选择", "protocol.py · sampling_params.py · engine/protocol.py"],
+        [5, "AsyncLLM、InputProcessor 与 EngineCore IPC", "v1/engine/async_llm.py · input_processor.py · core_client.py"],
+        [6, "调度、prefix cache 与 KV allocation", "scheduler.py · kv_cache_manager.py · block_pool.py"],
+        [7, "Executor / Worker / 模型前向", "multiproc_executor.py · gpu_worker.py · gpu_model_runner.py"],
+        [8, "Grammar、Sampler 与 Scheduler 完成判定", "gpu_model_runner.py · sampler.py · sched/utils.py"],
+        [9, "OutputProcessor、SSE 与 JSON 响应", "output_processor.py · detokenizer.py · chat_completion/serving.py"],
+        [10, "源码遗漏审计与补充分支", "Harmony · beam search · KV connector · speculation · finish/free"]
+      ];
+
+      // [id, stage, caller, callee, mode, file, class, startLine, lineLabel,
+      //  purpose, inputs, outputs, logic]
+      const RAW_STEPS = [
+        [1, 1, "Client", "Uvicorn", "http", null, "网络边界", 0, null,
+          "向 vLLM OpenAI 兼容服务发起 chat completion HTTP 请求。",
+          "POST /v1/chat/completions；JSON body；可选 Authorization Bearer token、X-Request-Id、X-data-parallel-rank。",
+          "Uvicorn 解析出的 ASGI scope、receive 与 send；后续转为 FastAPI Request 与 ChatCompletionRequest。",
+          "网络层接收字节流并建立连接上下文；真正业务校验从中间件和 FastAPI 之后开始。"],
+        [2, 1, "Uvicorn", "ASGI middleware stack", "async", "vllm/entrypoints/openai/api_server.py", "FastAPI app", 256, "L256-L311",
+          "依次执行 CORS、认证、请求 ID、扩缩容门禁、日志与用户自定义中间件。",
+          "ASGI scope、receive、send，以及应用启动时注册的 middleware 列表。",
+          "继续调用下一层 ASGI app，或直接返回 401/503 等短路响应。",
+          "Starlette 按注册逆序包裹应用；中间件可在路由和 Pydantic 解析之前拦截请求。"],
+        [3, 1, "AuthenticationMiddleware", "verify_token(headers)", "sync", "vllm/entrypoints/openai/server_utils.py", "AuthenticationMiddleware", 54, "L54-L69",
+          "验证 /v1 请求的 Bearer token 是否属于服务允许的 API key 集合。",
+          "Authorization header；初始化时保存的 token SHA-256 摘要列表。",
+          "布尔值；失败时 middleware 返回 401 JSON，不进入业务 handler。",
+          "跳过 OPTIONS；提取 Bearer 参数，计算 SHA-256，并用 secrets.compare_digest 对每个摘要做定时安全比较。"],
+        [4, 1, "FastAPI", "validate_json_request(raw_request)", "async", "vllm/entrypoints/openai/utils.py", "模块级函数", 43, "L43-L49",
+          "确认请求 body 声明为 application/json。",
+          "原始 Request 的 content-type header。",
+          "无返回表示通过；否则抛 RequestValidationError，最终由全局处理器返回 400。",
+          "取 media type 并去掉 charset 等参数；只接受 application/json。"],
+        [5, 1, "FastAPI", "ChatCompletionRequest.model_validate(body)", "sync", "vllm/entrypoints/openai/chat_completion/protocol.py", "ChatCompletionRequest", 150, "L150-L358",
+          "把 JSON body 解析并校验成 OpenAI Chat Completions 请求模型。",
+          "原始 JSON dict；messages、model、stream、tools、采样字段及 vLLM 扩展字段。",
+          "ChatCompletionRequest 实例；request_id 未提供时生成随机 UUID。",
+          "Pydantic 根据字段类型验证并补默认值；messages 中的 tool_calls 也会被物化为 list。"],
+        [6, 1, "Pydantic", "ChatCompletionRequest validators", "sync", "vllm/entrypoints/openai/chat_completion/protocol.py", "ChatCompletionRequest", 360, "L360-L399, L570-L826",
+          "执行协议层语义校验，拦截互斥或不可用参数组合。",
+          "初步构造的字段 dict 或已解析请求对象。",
+          "通过校验的请求对象，或抛出 VLLMValidationError/ValueError。",
+          "检查 stream_options 必须配合 stream、prompt/top_logprobs 约束、tool_choice 与 tools 匹配、structured outputs 单选、cache_salt 非空等。"],
+        [7, 1, "Route", "with_cancellation.wrapper(...)", "async", "vllm/entrypoints/utils.py", "模块级函数", 56, "L56-L98",
+          "让路由 handler 能随客户端断连被取消。",
+          "路由函数参数；其中 raw_request 用于监听 http.disconnect。",
+          "handler task 的返回值；若断连先发生则停止等待业务 task。",
+          "并发创建 handler task 和 listen_for_disconnect task，使用 asyncio.wait(FIRST_COMPLETED) 后取消未完成 task。"],
+        [8, 1, "Route", "load_aware_call.wrapper(...)", "async", "vllm/entrypoints/utils.py", "模块级函数", 105, "L105-L150",
+          "在启用 server load tracking 时统计正在处理的请求数。",
+          "raw_request、app.state.enable_server_load_tracking。",
+          "原 handler 响应；JSONResponse/StreamingResponse 会挂 background 减计数任务。",
+          "入口递增 server_load_metrics；异常立即减计数；正常响应通过 BackgroundTask 在结束后减计数。"],
+        [9, 1, "FastAPI", "create_chat_completion(request, raw_request)", "async", "vllm/entrypoints/openai/chat_completion/api_router.py", "模块级函数", 40, "L40-L74",
+          "chat completion HTTP 路由的主入口。",
+          "ChatCompletionRequest、raw_request、请求头中的 endpoint load metrics format。",
+          "ErrorResponse 转 JSONResponse、ChatCompletionResponse 转 JSONResponse，或 AsyncGenerator 转 StreamingResponse。",
+          "读取 chat handler；调用 OpenAIServingChat.create_chat_completion；根据返回类型决定 HTTP 响应形态。"],
+        [10, 1, "Route", "chat(raw_request)", "sync", "vllm/entrypoints/openai/chat_completion/api_router.py", "模块级函数", 32, "L32-L33",
+          "从 FastAPI app state 取得初始化好的 chat 服务 handler。",
+          "raw_request.app.state。",
+          "OpenAIServingChat 实例或 None。",
+          "直接读取 app.state.openai_serving_chat；None 时路由抛 501 NotImplementedError。"],
+        [11, 1, "Route", "OpenAIServingChat.create_chat_completion(...)", "async", "vllm/entrypoints/openai/chat_completion/serving.py", "OpenAIServingChat", 219, "L219-L372",
+          "把协议请求转成推理请求并选择流式或非流式响应。",
+          "ChatCompletionRequest、raw_request；服务默认模板、parser、renderer、engine_client。",
+          "ErrorResponse、ChatCompletionResponse 或 AsyncGenerator[str] SSE 流。",
+          "先预处理文本/多模态输入，再计算 token 预算与 SamplingParams，调用 engine_client.generate，最后交由 stream/full generator 组装。"],
+        [12, 2, "create_chat_completion", "_prepare_extra_chat_template_kwargs", "sync", "vllm/entrypoints/openai/engine/serving.py", "OpenAIServing", 523, "L523-L533",
+          "合并服务默认 chat template kwargs 与本次请求覆盖值。",
+          "request_chat_template_kwargs、default_chat_template_kwargs，两者均可为 None。",
+          "合并后的 kwargs dict；请求值覆盖同名服务默认值。",
+          "把 None 视为空 dict，使用字典合并实现 defaults | request。"],
+        [13, 2, "create_chat_completion", "reasoning_parser_cls(tokenizer, chat_template_kwargs)", "sync", "vllm/entrypoints/openai/chat_completion/serving.py", "OpenAIServingChat", 238, "L238-L243",
+          "为当前请求创建 reasoning parser 实例。",
+          "renderer tokenizer、合并后的 chat_template_kwargs、服务启动时选择的 parser class。",
+          "ReasoningParser 实例或 None。",
+          "只有配置 reasoning parser 才实例化；实例用于 prompt reasoning 状态判断和输出 reasoning/content 拆分。"],
+        [14, 2, "create_chat_completion", "render_chat_request(request)", "async", "vllm/entrypoints/openai/chat_completion/serving.py", "OpenAIServingChat", 192, "L192-L217",
+          "在预处理前执行 engine-aware 的模型与健康状态检查。",
+          "ChatCompletionRequest。",
+          "(conversation, engine_inputs) 或 ErrorResponse。",
+          "先调用 _check_model；再检查 engine_client.errored；最后委托 OpenAIServingRender.render_chat。"],
+        [15, 2, "render_chat_request", "OpenAIServing._check_model", "async", "vllm/entrypoints/openai/engine/serving.py", "OpenAIServing", 404, "L404-L432",
+          "确认请求的 model 是基础模型、静态 LoRA 或可解析的动态 LoRA。",
+          "request.model；OpenAIServingModels registry、lora_requests、运行时 LoRA 解析配置。",
+          "None 表示支持；否则返回 404 NotFoundError ErrorResponse。",
+          "依次匹配 served model 与已注册 LoRA；允许时再尝试动态解析；全部失败则构造参数 param=model 的错误响应。"],
+        [16, 2, "render_chat_request", "engine_client.errored / dead_error", "sync", "vllm/entrypoints/openai/chat_completion/serving.py", "OpenAIServingChat", 211, "L211-L215",
+          "阻止已经死亡的 engine 继续接受 chat 请求。",
+          "AsyncLLM 或 EngineClient 的健康状态。",
+          "正常继续；engine dead 时抛 dead_error。",
+          "该检查在 HTTP 响应开始前执行，避免流式分支先返回 200 后再暴露全局 engine 故障。"],
+        [17, 2, "render_chat_request", "OpenAIServingRender.render_chat(request)", "async", "vllm/entrypoints/serve/render/serving.py", "OpenAIServingRender", 185, "L185-L266",
+          "选择 Harmony 或普通 HF 模板路径，并执行工具与模板策略校验。",
+          "ChatCompletionRequest、tokenizer、tool parser、reasoning parser、默认模板和 content format。",
+          "(conversation, engine_inputs) 或 ErrorResponse。",
+          "处理 Mistral 兼容性；检查 tool parser 能力；将 tools 转 dict；校验模板信任；普通模型调用 preprocess_chat，Harmony 模型调用专用构造器。"],
+        [18, 2, "render_chat", "Mistral compatibility helpers", "sync", "vllm/entrypoints/serve/render/serving.py", "OpenAIServingRender", 198, "L198-L203",
+          "对 Mistral tokenizer 请求做序列化、tool call id 与参数约束修正。",
+          "ChatCompletionRequest；Mistral tokenizer 识别结果。",
+          "原地规范化后的 request。",
+          "执行 maybe_serialize_tool_calls、truncate_tool_call_ids、validate_request_params。"],
+        [19, 2, "render_chat", "tool_parsing_unavailable check", "sync", "vllm/entrypoints/serve/render/serving.py", "OpenAIServingRender", 205, "L205-L229",
+          "在没有工具解析能力时拒绝无法正确执行的 tool_choice。",
+          "tool_parser、tokenizer 类型、Harmony 状态、request.tool_choice、enable_auto_tools。",
+          "无返回表示通过；否则返回 BadRequest ErrorResponse。",
+          "auto 需要 enable_auto_tool_choice 与 tool_call_parser；required/named 还必须有可用的 tool parser。"],
+        [20, 2, "render_chat", "validate_chat_template(...)", "sync", "vllm/entrypoints/serve/render/serving.py", "OpenAIServingRender", 451, "L451-L470",
+          "决定是否接受客户端传入的 chat template。",
+          "request_chat_template、chat_template_kwargs、trust_request_chat_template 开关。",
+          "None 表示允许；否则 ErrorResponse 400。",
+          "若请求包含模板或 kwargs 中的 chat_template，且服务未显式 trust，则拒绝。"],
+        [21, 2, "render_chat", "preprocess_chat(...)", "async", "vllm/entrypoints/serve/render/serving.py", "OpenAIServingRender", 520, "L520-L597",
+          "为普通 HF 模板模型生成 conversation 和 EngineInput。",
+          "request、messages、默认 template/content format/kwargs、tool_dicts、tool_parser、reasoning_parser。",
+          "(conversation, [engine_input])。",
+          "构造 TokenizeParams 与 ChatParams；调用 renderer.render_chat_async；再执行 reasoning/tool parser 的 adjust_request。"],
+        [22, 2, "preprocess_chat", "request.build_tok_params(model_config)", "sync", "vllm/entrypoints/openai/chat_completion/protocol.py", "ChatCompletionRequest", 424, "L424-L440",
+          "把请求长度与截断字段转换为 TokenizeParams。",
+          "model_config.max_model_len、max_completion_tokens/max_tokens、truncate_prompt_tokens、add_special_tokens、echo。",
+          "TokenizeParams 实例。",
+          "选择输出 token 上限和字段名；echo 且不返回 token IDs 时要求 detokenization；最大总长度取模型上下文长度。"],
+        [23, 2, "preprocess_chat", "request.build_chat_params(...)", "sync", "vllm/entrypoints/openai/chat_completion/protocol.py", "ChatCompletionRequest", 404, "L404-L422",
+          "把请求级模板配置转换为 ChatParams。",
+          "默认 template、默认 content format、request.chat_template/kwargs、documents、reasoning_effort、media_io_kwargs。",
+          "ChatParams 实例。",
+          "请求模板优先于默认模板；add_generation_prompt、continue_final_message、documents、reasoning_effort 合入 template kwargs。"],
+        [24, 2, "preprocess_chat", "ChatParams.with_defaults(...)", "sync", "vllm/renderers/params.py", "ChatParams", 90, "L90-L118",
+          "叠加服务默认模板、media I/O 和 MM processor 参数。",
+          "默认 template kwargs、默认 media_io_kwargs、默认 mm_processor_kwargs，以及请求级 ChatParams。",
+          "合并后的 ChatParams，或原对象（无默认值时）。",
+          "浅合并 chat kwargs；media I/O 使用专用合并函数；MM processor kwargs 递归合并，请求值优先。"],
+        [25, 2, "preprocess_chat", "renderer.render_chat_async(...)", "async", "vllm/renderers/base.py", "BaseRenderer", 965, "L965-L1003",
+          "统一执行消息渲染、tokenization 和 EngineInput 构造。",
+          "messages 列表、ChatParams、TokenizeParams、prompt_extras、skip_mm_cache。",
+          "conversation 列表和 EngineInput 列表。",
+          "并发 render_messages_async；并发 tokenize_prompts_async；注入 extras；再并发 process_for_engine_async。"],
+        [26, 3, "render_chat_async", "HfRenderer.render_messages_async", "async", "vllm/renderers/hf.py", "HfRenderer", 681, "L681-L736",
+          "把一条或多条 OpenAI messages 渲染成 HF prompt，并保留多模态数据。",
+          "messages、ChatParams；tokenizer、model_config、media I/O 参数。",
+          "(conversation, DictPrompt)；DictPrompt 可含 prompt、multi_modal_data、multi_modal_uuids。",
+          "先异步解析消息与媒体；再用 chat template 生成原始 prompt；最后 parse_dec_only_prompt 并附加 MM 数据。"],
+        [27, 3, "render_messages_async", "parse_chat_messages_async(...)", "async", "vllm/entrypoints/chat_utils.py", "模块级函数", 1636, "L1636-L1671",
+          "把 OpenAI content parts 规范化为模板可消费的 conversation。",
+          "messages、model_config、content_format、media_io_kwargs、mm_processor_kwargs。",
+          "conversation、MultiModalDataDict、MultiModalUUIDDict。",
+          "创建 AsyncMultiModalItemTracker；逐条解析消息和 parts；后处理 tool call arguments；异步 resolve 所有媒体项。"],
+        [28, 3, "chat_utils", "_parse_chat_message_content_parts / _parse_chat_message_content_part", "sync", "vllm/entrypoints/chat_utils.py", "模块级函数", 1382, "L1382-L1502",
+          "识别每个 content part 的 modality 并交给对应 parser。",
+          "role、parts、MM tracker、wrap_dicts、interleave_strings、mm_processor_kwargs。",
+          "ConversationMessage 列表；openai 格式保留 dict parts，string 格式插入模型占位符。",
+          "遍历 parts；文本直接保留；图片/音频/视频/embeds 调用 tracker 对应 parse_* 方法；最后按格式合并 content。"],
+        [29, 3, "content parser", "AsyncMultiModalContentParser.parse_*", "sync", "vllm/entrypoints/chat_utils.py", "AsyncMultiModalContentParser", 915, "L915-L1074",
+          "登记每种媒体，并生成模型模板需要的占位符。",
+          "image_url/image_embeds/audio_url/input_audio/video_url、可选 UUID、mm_processor_kwargs。",
+          "写入 AsyncMultiModalItemTracker 的异步任务与 modality 顺序；返回占位符字符串。",
+          "解析 media 参数；对 URL 类媒体创建异步 fetch coroutine；对 embeds 直接建 Future；按 modality 计数并校验数量限制。"],
+        [30, 3, "AsyncMultiModalContentParser", "MediaConnector.fetch_*_async", "async", "vllm/entrypoints/chat_utils.py", "AsyncMultiModalContentParser", 936, "L936-L1074",
+          "异步加载图片、音频和视频媒体。",
+          "媒体 URL/data URI/受限本地路径；media_io_kwargs、allowed local path、allowed domains。",
+          "解码后的 PIL Image、音频/视频对象，或 None；随 UUID 存入 tracker。",
+          "由 MediaConnector 执行 fetch；异步加载避免阻塞事件循环；解析和抓取错误会抛回请求。"],
+        [31, 3, "parse_chat_messages_async", "AsyncMultiModalItemTracker.resolve_items()", "async", "vllm/entrypoints/chat_utils.py", "AsyncMultiModalItemTracker", 702, "L702-L718",
+          "等待并汇总所有 modality 的媒体结果与 UUID。",
+          "按 modality 保存的 awaitable 列表和 modality 顺序。",
+          "MultiModalDataDict、MultiModalUUIDDict；无媒体时为 None, None。",
+          "对每个 modality 的 coroutine 执行 asyncio.gather；解析 raw image/video/audio；禁止 raw 与 embeds 混用；生成有序 mm_data。"],
+        [32, 3, "render_messages_async", "HfRenderer._apply_chat_template_async", "thread", "vllm/renderers/hf.py", "HfRenderer", 618, "L618-L620",
+          "把阻塞的 Jinja/HF chat template 渲染移出 asyncio 事件循环。",
+          "model_config、tokenizer、conversation、template kwargs。",
+          "模板字符串或 token ids。",
+          "__init__ 中用 make_async(..., executor=self._executor) 包装 safe_apply_chat_template；调用时 await executor future。"],
+        [33, 3, "thread pool", "safe_apply_chat_template(...)", "sync", "vllm/renderers/hf.py", "模块级函数", 460, "L460-L505",
+          "安全解析并应用 chat template，标准化外部库异常。",
+          "model_config、HfTokenizer、conversation、tools、chat_template、tokenize、kwargs。",
+          "str 或 list[int] prompt；模板缺失或 HF 异常时抛 ValueError/ChatTemplateResolutionError。",
+          "先 resolve_chat_template；再过滤 kwargs；调用 tokenizer.apply_chat_template；记录并包装 transformers 异常。"],
+        [34, 3, "safe_apply_chat_template", "resolve_chat_template / resolve_chat_template_kwargs", "sync", "vllm/renderers/hf.py", "模块级函数", 96, "L96-L250, L407-L435",
+          "选择正确模板，并过滤模板真正支持的 kwargs。",
+          "tokenizer、请求 template、tools、model_config；chat_template_kwargs。",
+          "最终模板字符串与可接受的 kwargs dict。",
+          "模板来源包括请求、服务默认、tokenizer/model 配置与内置 registry；kwargs 根据函数签名、Jinja 未声明变量与 HF 基类参数交集筛选。"],
+        [35, 3, "safe_apply_chat_template", "tokenizer.apply_chat_template(...)", "sync", "vllm/renderers/hf.py", "HfTokenizer（外部）/ 调用点", 460, "L460-L505",
+          "真正执行 Hugging Face tokenizer 的模板渲染。",
+          "conversation、tools、chat_template、tokenize 和已过滤 kwargs。",
+          "普通 HF tokenizer 通常返回字符串；Mistral tokenizer 可能返回 token ids。",
+          "该调用发生在 renderer executor 中；Jinja 模板语法错误、模板变量错误或 tokenizer 内部错误会转为请求错误。"],
+        [36, 3, "render_messages_async", "parse_dec_only_prompt(prompt_raw)", "sync", "vllm/renderers/inputs/preprocess.py", "模块级函数", 119, "L119-L145",
+          "把模板输出标准化成 decoder-only prompt dict。",
+          "字符串、整数 token list 或 prompt dict。",
+          "TextPrompt 或 TokensPrompt；非法结构抛 TypeError。",
+          "字符串转 TextPrompt；整数列表转 TokensPrompt；已有 prompt/prompt_token_ids/prompt_embeds 的 dict 直接返回。"],
+        [37, 3, "render_chat_async", "BaseRenderer.tokenize_prompts_async", "async", "vllm/renderers/base.py", "BaseRenderer", 547, "L547-L554",
+          "并发对多个 dict prompt 做 tokenization。",
+          "dict_prompts、TokenizeParams。",
+          "按输入顺序排列的 TokPrompt 列表。",
+          "使用 asyncio.gather 调用每个 tokenize_prompt_async；单个请求通常只有一个 prompt。"],
+        [38, 3, "tokenize_prompt_async", "AsyncMicrobatchTokenizer.encode", "async", "vllm/utils/async_utils.py", "AsyncMicrobatchTokenizer", 62, "L62-L70",
+          "异步编码文本，并在合理窗口内合并同参数请求。",
+          "prompt string、tokenizer encode kwargs（max_length、truncation、add_special_tokens 等）。",
+          "token ids list。",
+          "把请求放入按 kwargs 分组的 asyncio queue；后台 batch loop 最多聚合 32 条并等待约 2ms；底层调用放到单线程 executor。"],
+        [39, 3, "AsyncMicrobatchTokenizer", "_batch_encode_loop", "thread", "vllm/utils/async_utils.py", "AsyncMicrobatchTokenizer", 90, "L90-L120",
+          "在单线程 executor 中执行阻塞 tokenizer batch encode。",
+          "积累的 prompts、kwargs 列表、每个调用者的 Future。",
+          "BatchEncoding；随后把 input_ids 回填到各 Future。",
+          "按队列 key 限制可合并性；到 batch 上限或超时后调用 tokenizer；异常传播给对应等待者。"],
+        [40, 3, "tokenize_prompt_async", "TokenizeParams pre/post validation", "sync", "vllm/renderers/params.py", "TokenizeParams", 355, "L355-L465",
+          "在 tokenization 前后执行文本与 token 约束。",
+          "tokenizer、TextPrompt/TokensPrompt、max_total_tokens、max_output_tokens、truncate_prompt_tokens。",
+          "校验或截断后的 prompt；超限时抛 VLLMValidationError。",
+          "前置检查 max chars per token 与小写；后置做 padding、左侧/右侧截断与 token 长度检查。"],
+        [41, 3, "render_chat_async", "BaseRenderer._apply_prompt_extras", "sync", "vllm/renderers/base.py", "BaseRenderer", 557, "L557-L567",
+          "把请求级额外字段附加到 tokenized prompt。",
+          "TokPrompt 列表、prompt_extras（cache_salt、mm_processor_kwargs）。",
+          "原地更新后的 target prompt。",
+          "根据 encoder-decoder 或 decoder-only 选择目标 prompt；把 extras 合并进 prompt dict。"],
+        [42, 3, "render_chat_async", "BaseRenderer.process_for_engine_async", "async", "vllm/renderers/base.py", "BaseRenderer", 856, "L856-L876",
+          "把 tokenized prompt 转换为 EngineInput。",
+          "TokPrompt、arrival_time、skip_mm_cache。",
+          "TokensInput/EmbedsInput/MultiModalInput/EncoderDecoderInput；附带 arrival_time。",
+          "根据是否有 encoder_prompt 分流；调用 _process_singleton_async 或 _process_enc_dec_async；最后写入 arrival_time。"],
+        [43, 3, "multimodal branch", "BaseRenderer._process_multimodal_async", "thread", "vllm/renderers/base.py", "BaseRenderer", 105, "L105-L107, L635-L673",
+          "把 CPU 密集的多模态 processor 工作放到 MM executor。",
+          "prompt token ids、multi_modal_data、UUID、processor kwargs、skip_mm_cache。",
+          "MultiModalInput，包含 mm_kwargs、mm_placeholders、mm_hashes。",
+          "调用 make_async 包装的 _process_multimodal；使用主或 readonly MM processor；在 executor 内完成 processor.apply。"],
+        [44, 3, "BaseRenderer", "_process_multimodal", "sync", "vllm/renderers/base.py", "BaseRenderer", 635, "L635-L673",
+          "实际运行模型专用多模态 processor。",
+          "prompt token ids、mm_data、mm_uuids、mm_processor_kwargs、tokenization_kwargs。",
+          "MultiModalInput；包含模型可消费的 tensor/feature 和占位符信息。",
+          "创建 mm_req_id；解析 mm_data 和 UUID；校验数量；构造 MMProcessorInputs；调用 mm_processor.apply；更新 cache stats。"],
+        [45, 3, "text branch", "tokens_input(prompt_token_ids)", "sync", "vllm/inputs/engine.py", "模块级函数", 42, "L42-L60",
+          "构造纯文本 token EngineInput。",
+          "prompt_token_ids，以及后续附加的 prompt text/cache_salt。",
+          "TokensInput dict，type=tokens。",
+          "文本模型不需要 inputs_embeds；直接携带 token ids 进入 InputProcessor。"],
+        [46, 3, "preprocess_chat", "reasoning_parser.adjust_request(request)", "sync", "vllm/reasoning/abs_reasoning_parsers.py", "ReasoningParser", 171, "L171-L185",
+          "让 reasoning parser 调整请求中的采样或输出参数。",
+          "request 与 parser 的模型配置。",
+          "调整后的 request；部分实现原地修改。",
+          "抽象 parser 默认返回请求；具体 parser 可按模型需要注入 stop token、reasoning 状态或 structured output 设置。"],
+        [47, 3, "preprocess_chat", "tool_parser.adjust_request(request)", "sync", "vllm/tool_parsers/mistral_tool_parser.py", "MistralToolParser", 156, "L156-L280",
+          "把工具调用需求转换为 grammar 或 structured output 约束。",
+          "request、tokenizer、tools、tool_choice、parallel_tool_calls。",
+          "调整后的 request；Mistral 路径会设置 structured_outputs 与 _grammar_from_tool_parser。",
+          "Mistral 根据 tools、tool_choice、JSON schema 生成 Lark grammar，并原地写入 structured_outputs。"],
+        [48, 4, "create_chat_completion", "OpenAIServing._base_request_id", "sync", "vllm/entrypoints/openai/engine/serving.py", "OpenAIServing", 579, "L579-L589",
+          "确定跨日志、引擎与响应使用的请求 ID。",
+          "raw_request 的 X-Request-Id header；Pydantic 生成的 request.request_id。",
+          "字符串请求 ID；最终 chat ID 再添加 chatcmpl- 前缀。",
+          "优先使用 X-Request-Id；否则使用请求模型中的 request_id。"],
+        [49, 4, "create_chat_completion", "OpenAIServing._maybe_get_adapters", "sync", "vllm/entrypoints/openai/engine/serving.py", "OpenAIServing", 457, "L457-L476",
+          "为请求选择显式或默认多模态 LoRA。",
+          "request.model、messages content types、registered lora_requests。",
+          "LoRARequest 或 None。",
+          "先匹配 model 名对应的 LoRA；chat 还可用消息 modality 匹配默认 MM LoRA；必须恰好匹配一个。"],
+        [50, 4, "create_chat_completion", "OpenAIServing._get_data_parallel_rank", "sync", "vllm/entrypoints/openai/engine/serving.py", "OpenAIServing", 591, "L591-L604",
+          "读取外部路由器指定的 data parallel rank。",
+          "raw_request headers 中的 X-data-parallel-rank。",
+          "整数 rank 或 None。",
+          "缺失时返回 None；非法整数也退化为 None，后续由 InputProcessor 校验支持范围。"],
+        [51, 4, "create_chat_completion", "get_max_tokens", "sync", "vllm/entrypoints/utils.py", "模块级函数", 174, "L174-L203",
+          "计算本次请求可生成的最大 token 数。",
+          "max_model_len、请求 max_tokens/max_completion_tokens、input_length、默认采样参数、generation config override。",
+          "整数 max_tokens；输入超长时抛 ValueError。",
+          "先验证 input_length 不超过上下文；再取模型剩余长度、请求/默认值、override 与平台上限的最小非 None 值。"],
+        [52, 4, "create_chat_completion", "ChatCompletionRequest.to_sampling_params", "sync", "vllm/entrypoints/openai/chat_completion/protocol.py", "ChatCompletionRequest", 469, "L469-L568",
+          "把 HTTP 请求字段转换成引擎 SamplingParams。",
+          "max_tokens、model default sampling params、请求采样/停止/结构化输出字段。",
+          "SamplingParams；stream 决定 RequestOutputKind.DELTA 或 FINAL_ONLY。",
+          "填默认 temperature/top_p/top_k/min_p/penalty；映射 stop、logprobs、structured outputs；kv_transfer_params 写入 extra_args。"],
+        [53, 4, "to_sampling_params", "SamplingParams.from_optional", "sync", "vllm/sampling_params.py", "SamplingParams", 314, "L314-L470",
+          "构造实际传给 engine 的采样参数对象。",
+          "n、penalties、temperature、top_p/top_k/min_p、seed、stop、max_tokens、logprobs、structured_outputs、extra_args。",
+          "SamplingParams 实例。",
+          "过滤 None 字段并应用默认语义；保存 output_kind、stop token、logit processors、bad words、repetition detection 等。"],
+        [54, 4, "create_chat_completion", "OpenAIServing._log_inputs", "sync", "vllm/entrypoints/openai/engine/serving.py", "OpenAIServing", 544, "L544-L563",
+          "在开启请求日志时记录输入内容与参数。",
+          "request_id、EngineInput、SamplingParams/BeamSearchParams、LoRARequest、RequestLogger。",
+          "无返回；副作用是写请求日志。",
+          "提取 prompt 的 text/token_ids/embeds，再连同 params 和 LoRA 写入 logger。"],
+        [55, 4, "create_chat_completion", "OpenAIServing._get_trace_headers", "async", "vllm/entrypoints/openai/engine/serving.py", "OpenAIServing", 565, "L565-L577",
+          "按 tracing 配置提取 W3C/HTTP trace context。",
+          "raw_request headers；engine_client.is_tracing_enabled。",
+          "trace header mapping 或 None。",
+          "tracing 开启时调用 extract_trace_headers；关闭但请求带 trace header 时记录一次 warning。"],
+        [56, 4, "create_chat_completion", "reasoning_parser.is_reasoning_end", "sync", "vllm/reasoning/abs_reasoning_parsers.py", "ReasoningParser", 61, "L61-L75",
+          "判断 prompt 本身是否已经结束 reasoning 阶段。",
+          "prompt_token_ids、parser 的模型 tokenizer 和 reasoning end token。",
+          "布尔值；部分 parser 可能返回 None。",
+          "检查 prompt token 中是否已出现 reasoning end token，以便首个输出直接进入 final content。"],
+        [57, 4, "create_chat_completion", "EngineClient.generate", "async_gen", "vllm/engine/protocol.py", "EngineClient", 65, "L65-L81",
+          "以异步生成器形式启动一次生成请求。",
+          "EngineInput、SamplingParams、request_id、LoRARequest、trace_headers、priority、DP rank、reasoning_ended。",
+          "AsyncGenerator[RequestOutput, None]；调用时尚未执行模型前向。",
+          "接口将 prompt 与参数交给具体实现 AsyncLLM；输出 generator 由 stream/full 生成器消费。"],
+        [58, 4, "create_chat_completion", "stream/full generator selector", "async", "vllm/entrypoints/openai/chat_completion/serving.py", "OpenAIServingChat", 350, "L350-L372",
+          "根据 request.stream 选择响应组装器。",
+          "request、result_generator、request_id、model_name、conversation、tokenizer、metadata、reasoning_parser。",
+          "chat_completion_stream_generator 的 AsyncGenerator，或 await full_generator 的完整响应。",
+          "request.stream=True 时返回 SSE generator；False 时消费 engine generator 的最终 RequestOutput 并构造 ChatCompletionResponse。beam search 不走单一 SamplingParams 路径，而是在 OpenAIServing.beam_search 中逐步对每个 beam 调用 generate。"],
+        [59, 5, "chat generator", "AsyncLLM.generate", "async_gen", "vllm/v1/engine/async_llm.py", "AsyncLLM", 523, "L523-L632",
+          "在 API 进程侧驱动一个完整生成生命周期。",
+          "EngineInput、SamplingParams、request_id、可选 prompt_text/LoRA/trace/priority/DP rank/reasoning_ended。",
+          "AsyncGenerator[RequestOutput]；逐次 yield DELTA 或最终输出。",
+          "add_request 建 collector；循环从 collector 取输出；finished 后退出；断连或生成器关闭时 abort。"],
+        [60, 5, "AsyncLLM.generate", "AsyncLLM.add_request", "async", "vllm/v1/engine/async_llm.py", "AsyncLLM", 282, "L282-L414",
+          "把高层生成调用转换成 EngineCoreRequest 与本地输出状态。",
+          "request_id、prompt、SamplingParams/PoolingParams、arrival time、LoRA、priority、DP rank。",
+          "RequestOutputCollector。",
+          "校验 engine 状态与参数；调用 InputProcessor；分配内部 request id；创建 collector；n>1 时展开 parent/child。"],
+        [61, 5, "add_request", "InputProcessor.process_inputs", "sync", "vllm/v1/engine/input_processor.py", "InputProcessor", 195, "L195-L335",
+          "把渲染后的 EngineInput 标准化成 EngineCoreRequest。",
+          "request_id、EngineInput、SamplingParams、supported tasks、arrival time、LoRA、priority、DP rank。",
+          "EngineCoreRequest。",
+          "校验参数与 LoRA，验证平台/输入长度，clone 采样参数，更新模型与 tokenizer 默认值，构建 mm_features 并按位置排序。"],
+        [62, 5, "process_inputs", "InputProcessor._validate_params / _validate_lora", "sync", "vllm/v1/engine/input_processor.py", "InputProcessor", 81, "L81-L155",
+          "在跨进程提交前拒绝不支持的采样参数与 LoRA 配置。",
+          "SamplingParams 或 PoolingParams、supported_tasks、VllmConfig、LoRARequest。",
+          "无返回表示通过；否则抛 ValueError。",
+          "检查 generation task、SamplingParams.verify、thinking budget、pooling task；LoRA 未启用时拒绝 adapter。"],
+        [63, 5, "process_inputs", "current_platform.validate_request", "sync", "vllm/v1/engine/input_processor.py", "InputProcessor", 249, "L249-L252",
+          "执行当前硬件平台特有的请求限制。",
+          "processed EngineInput、SamplingParams/PoolingParams、current_platform。",
+          "无返回表示通过；否则由平台实现抛错。",
+          "不同平台可检查 dtype、输入类型、采样能力或特殊 prompt 结构。"],
+        [64, 5, "process_inputs", "split_enc_dec_input / _validate_model_inputs", "sync", "vllm/v1/engine/input_processor.py", "InputProcessor", 251, "L251-L430",
+          "拆分 encoder/decoder 输入并验证 token 长度、ID 范围和 MM 占位符。",
+          "processed EngineInput、model_config、tokenizer、MM encoder cache budget。",
+          "encoder_inputs、decoder_inputs；不合法时抛 ValueError。",
+          "检查 decoder prompt 非空、输入长度不超过 max_model_len、最大 token id 合法、MM embed 数不超过 encoder cache。"],
+        [65, 5, "process_inputs", "SamplingParams clone and defaults", "sync", "vllm/v1/engine/input_processor.py", "InputProcessor", 262, "L262-L281",
+          "复制参数并应用模型 generation config 与 tokenizer 默认值。",
+          "SamplingParams、generation_config_fields、tokenizer eos/stop 信息。",
+          "EngineCoreRequest 使用的 SamplingParams 副本。",
+          "clone 防止上层对象被跨进程改动；未设置 max_tokens 时按模型上下文补齐；合并模型与 tokenizer 默认 EOS/stop。"],
+        [66, 5, "process_inputs", "multimodal feature builder", "sync", "vllm/v1/engine/input_processor.py", "InputProcessor", 283, "L283-L320",
+          "把多模态 hash、数据和 placeholder 整理为调度器可执行的 feature 列表。",
+          "decoder mm_kwargs、mm_placeholders、mm_hashes、LoRARequest。",
+          "list[MultiModalFeatureSpec] 或 None。",
+          "验证 hash 叶节点均为字符串；按 placeholder offset 排序；为每个 item 建 modality、identifier、position 与 hash。"],
+        [67, 5, "process_inputs", "EngineCoreRequest(...)", "sync", "vllm/v1/engine/__init__.py", "EngineCoreRequest", 80, "L80-L229",
+          "构造 API 进程发送给 EngineCore 的请求对象。",
+          "request_id、prompt token ids/embeds、mm_features、sampling/pooling params、arrival time、LoRA、cache_salt、priority。",
+          "EngineCoreRequest，可被 msgpack/serializer 编码。",
+          "保存 decoder 主模型输入与可选 mm features；参数对象决定后续 schedule 和 sampling 行为。"],
+        [68, 5, "add_request", "InputProcessor.assign_request_id", "sync", "vllm/v1/engine/input_processor.py", "InputProcessor", 175, "L175-L193",
+          "把外部请求 ID 与内部请求 ID 分离，降低重复 ID 冲突。",
+          "EngineCoreRequest.request_id、环境变量 VLLM_DISABLE_REQUEST_ID_RANDOMIZATION。",
+          "更新后的 request.external_req_id 与 request.request_id。",
+          "external_req_id 保存调用方 ID；默认内部 ID 追加 8 位随机 UUID；关闭随机化时打印 warning。"],
+        [69, 5, "add_request", "RequestOutputCollector.__init__", "sync", "vllm/v1/engine/output_processor.py", "RequestOutputCollector", 45, "L45-L106",
+          "创建 API 进程中的每请求输出队列。",
+          "SamplingParams.output_kind、内部 request_id。",
+          "RequestOutputCollector；含 output buffer、asyncio.Event、request_id。",
+          "DELTA 模式开启 aggregate；FINAL_ONLY 模式后续输出替换旧快照；Exception 通过 get 抛给 generate。"],
+        [70, 5, "add_request", "ParentRequest.get_child_info", "sync", "vllm/v1/engine/parallel_sampling.py", "ParentRequest", 13, "L13-L180",
+          "为 n>1 的并行采样创建子请求标识和子 SamplingParams。",
+          "父 EngineCoreRequest、n、父参数、choice index。",
+          "子 request_id 与 child SamplingParams。",
+          "父请求作为聚合器；每个 child 独立在 EngineCore 调度和采样；OutputProcessor 最后合并所有 child outputs。"],
+        [71, 5, "_add_request", "OutputProcessor.add_request", "sync", "vllm/v1/engine/output_processor.py", "OutputProcessor", 508, "L508-L537",
+          "在 API 进程注册 request 状态与输出队列。",
+          "EngineCoreRequest、prompt text、parent request、request index、collector。",
+          "无返回；写入 request_states 和 external_req_ids 映射。",
+          "若已存在同内部 ID 则走 streaming update；否则创建 RequestState 并登记 external→internal 映射。"],
+        [72, 5, "OutputProcessor", "RequestState.from_new_request", "sync", "vllm/v1/engine/output_processor.py", "RequestState", 207, "L207-L267",
+          "创建每请求的 detokenizer、logprobs、stats 与输出状态。",
+          "tokenizer、EngineCoreRequest、prompt、parent、index、queue、log_stats、stream_interval。",
+          "RequestState。",
+          "从 SamplingParams 取 output_kind、max_tokens、top_p、n、temperature；创建 logprobs processor 和 incremental detokenizer。"],
+        [73, 5, "RequestState", "IncrementalDetokenizer.from_new_request", "sync", "vllm/v1/engine/detokenizer.py", "IncrementalDetokenizer", 49, "L49-L65",
+          "为请求选择增量 detokenizer 实现并初始化 stop buffer。",
+          "tokenizer、EngineCoreRequest、SamplingParams.stop/min_tokens。",
+          "FastIncrementalDetokenizer、SlowIncrementalDetokenizer 或 no-op detokenizer。",
+          "无 tokenizer 时跳过 detokenization；fast tokenizer 用 DecodeStream；其他 tokenizer 用 Python 增量 detokenize。"],
+        [74, 5, "_add_request", "AsyncLLM._add_request", "async", "vllm/v1/engine/async_llm.py", "AsyncLLM", 399, "L399-L414",
+          "把请求同时注册到本地输出状态与远端 EngineCore。",
+          "EngineCoreRequest、prompt、parent、index、collector。",
+          "无返回；请求进入 EngineCore 的 ADD 通道。",
+          "先 OutputProcessor.add_request，再 await engine_core.add_request_async；可按配置记录 Added request 日志。"],
+        [75, 5, "AsyncMPClient", "_send_input / _send_input_message", "ipc", "vllm/v1/engine/core_client.py", "AsyncMPClient", 1001, "L1001-L1061",
+          "通过 ZMQ input socket 发送 ADD/ABORT/UTILITY 消息。",
+          "请求类型、request 对象、EngineIdentity、tensor buffers。",
+          "发送完成 future 或 None；EngineCore 异步接收。",
+          "消息用 msgpack 编码成 multipart；保留 tensor backing buffers 直到 ZMQ 发送完成；ADD 后确保 output queue task 启动。"],
+        [76, 5, "EngineCore", "EngineCoreProc.run_busy_loop / MsgpackDecoder", "sync", "vllm/v1/engine/core.py", "EngineCoreProc", 1160, "L1160-L1460",
+          "EngineCore 进程同步接收并分发 API 进程消息。",
+          "ZMQ input socket 消息、abort queue、utility RPC、ADD 请求。",
+          "调用 add_request 或 utility handler；随后进入 step 循环。",
+          "解码消息类型；ADD 先 preprocess_add_request；ABORT 进入 aborts_queue；UTILITY 调用对应 engine 方法。"],
+        [77, 5, "preprocess_add_request", "Request.from_engine_core_request", "sync", "vllm/v1/engine/core.py", "EngineCore", 761, "L761-L783",
+          "把 EngineCoreRequest 转成调度器内部 Request。",
+          "EngineCoreRequest、request_block_hasher、mm_receiver_cache。",
+          "Request 与 request wave。",
+          "必要时更新 MM receiver features；构造 Request；有 structured output 时初始化 grammar；返回调度器可入队对象。"],
+        [78, 5, "Request", "get_request_block_hasher(...)(request)", "sync", "vllm/v1/core/kv_cache_utils.py", "模块级闭包", 565, "L565-L616",
+          "为新增完整 token block 生成链式 prefix-cache hash。",
+          "block_size、caching hash function、request.all_token_ids、父 block hash、extra keys。",
+          "新 block hash 列表。",
+          "只哈希完整 block；extra keys 包含 LoRA、多模态 identifier/位置、首个 block 的 cache_salt、prompt embeds hash。"],
+        [79, 5, "preprocess_add_request", "structured_output_manager.grammar_init", "async", "vllm/v1/structured_output/__init__.py", "StructuredOutputManager", 97, "L97-L185",
+          "初始化 requests 的 structured-output grammar。",
+          "Request、structured_outputs 参数、tokenizer/vocab、并行编译配置。",
+          "无同步返回；grammar 编译任务异步推进，ready 后可调度。",
+          "只对 use_structured_output 的请求执行；编译 JSON schema/regex/choice/grammar；调度器在 ready 前会把请求放入 blocked waiting。"],
+        [80, 5, "EngineCore", "Scheduler.add_request", "sync", "vllm/v1/core/sched/scheduler.py", "Scheduler", 1737, "L1737-L1757",
+          "把新请求加入调度队列。",
+          "Request、当前 scheduling policy、pause/blocking 状态。",
+          "无返回；Request 存在 requests map 和 waiting/skipped_waiting 队尾。",
+          "同 ID 请求走 streaming update/duplicate 处理；新请求按状态进入 waiting；log_stats 开启时记录 QUEUED 事件。"],
+        [81, 6, "EngineCore run loop", "EngineCore.step", "sync", "vllm/v1/engine/core.py", "EngineCore", 404, "L404-L433",
+          "执行一次 schedule、forward、sample、update 的完整引擎迭代。",
+          "Scheduler 中的请求、model executor、grammar manager、abort queue。",
+          "按 client_index 分组的 EngineCoreOutputs，以及是否执行了模型的布尔值。",
+          "无请求直接返回；否则 schedule 得到 SchedulerOutput；启动非阻塞模型执行；获取 grammar mask；等待 forward future；必要时 sample；最后 update_from_output。"],
+        [82, 6, "EngineCore.step", "Scheduler.schedule", "sync", "vllm/v1/core/sched/scheduler.py", "Scheduler", 348, "L348-L954",
+          "构建本步执行计划并分配 KV/encoder 资源。",
+          "running/waiting/skipped_waiting 请求、token budget、KV/encoder cache 状态、prefix/KV connector 配置。",
+          "SchedulerOutput：new/cached requests、block ids、num_scheduled_tokens、spec/encoder inputs、finished/preempted ids。",
+          "先调度 running；KV 不足时抢占；再调度 waiting；查询 prefix/connector；分配 slots；记录 common prefix；最后构建 output 并推进 computed tokens。"],
+        [83, 6, "Scheduler.schedule", "KVCacheManager.get_computed_blocks", "sync", "vllm/v1/core/kv_cache_manager.py", "KVCacheManager", 176, "L176-L216",
+          "为首次调度的请求查找可复用的本地 prefix KV blocks。",
+          "Request.block_hashes、num_tokens、prefix caching 开关、skip_reading_prefix_cache。",
+          "KVCacheBlocks 与命中 token 数。",
+          "禁用缓存或要求重算时返回空；否则最多查 num_tokens-1；调用 coordinator.find_longest_cache_hit；记录 PrefixCacheStats。"],
+        [84, 6, "get_computed_blocks", "UnitaryKVCacheCoordinator.find_longest_cache_hit", "sync", "vllm/v1/core/kv_cache_coordinator.py", "UnitaryKVCacheCoordinator", 349, "L349-L399",
+          "沿请求 block hash 链查找最长连续命中前缀。",
+          "request.block_hashes、max_cache_hit_length、KV group、eagle/sliding-window 设置。",
+          "命中的 KVCacheBlock 列表和命中 token 数。",
+          "逐 block hash 查找；遇到 miss 停止；按 max length 截断；多 group 必须每 group 都命中才算整体命中。"],
+        [85, 6, "coordinator", "BlockPool.get_cached_block", "sync", "vllm/v1/core/block_pool.py", "BlockPool", 184, "L184-L209",
+          "按 block hash 与 KV group 查询缓存 block。",
+          "block_hash、kv_cache_group_ids、cached_block_hash_to_block 映射。",
+          "缓存 block 列表，或任一 group miss 时 None。",
+          "把 group id 混入 block hash key，逐 group 查询；支持同一 hash 有多个 block 时返回映射中的第一个。"],
+        [86, 6, "Scheduler.schedule", "connector.get_num_new_matched_tokens", "sync", "vllm/v1/core/sched/scheduler.py", "Scheduler", 616, "L616-L638",
+          "查询外部 KV connector 是否可提供更多已计算 prefix。",
+          "Request、num_new_local_computed_tokens、connector 配置。",
+          "外部命中 token 数、是否异步加载标志；None 表示暂不可调度。",
+          "本地 prefix 命中后调用 connector；记录 query/hit stats；可延迟获取；若 load async 则本步不执行普通 prefill。"],
+        [87, 6, "Scheduler.schedule", "KVCacheManager.allocate_slots", "sync", "vllm/v1/core/kv_cache_manager.py", "KVCacheManager", 257, "L257-L427",
+          "为 computed 前缀、本步新 token 与 speculative lookahead 分配 GPU KV slots。",
+          "request、num_new_tokens、new computed blocks、external tokens、lookahead、encoder tokens、delay_cache_blocks。",
+          "KVCacheBlocks 或 None；None 表示 free pool 不足。",
+          "释放滑窗不需要的 block；计算新需求；append/touch 命中 block；分配新 blocks；提交完整 block 到 prefix cache。"],
+        [88, 6, "allocate_slots", "KVCacheCoordinator allocation methods", "sync", "vllm/v1/core/kv_cache_coordinator.py", "KVCacheCoordinator", 71, "L71-L176",
+          "协调多 KV group 的 block 需求、命中引用和新分配。",
+          "request_id、num_tokens、new_computed_blocks、encoder tokens、total computed tokens。",
+          "block 数或按 group 的新 block 列表。",
+          "逐 group 调用 single_type manager；cross-attention group 使用 encoder token 数；最终按 group 返回 blocks。"],
+        [89, 6, "coordinator", "BlockPool.get_new_blocks", "sync", "vllm/v1/core/block_pool.py", "BlockPool", 322, "L322-L352",
+          "从 free block queue 分配真实 GPU KV block。",
+          "num_blocks、free_block_queue、caching 状态、metrics collector。",
+          "KVCacheBlock 列表，每块 ref_cnt 加一。",
+          "若不足抛 ValueError；popleft_n 取块；缓存开启时 evict 原 hash 映射；递增 ref count 并记录 allocation metric。"],
+        [90, 6, "allocate_slots", "KVCacheCoordinator.cache_blocks", "sync", "vllm/v1/core/kv_cache_coordinator.py", "KVCacheCoordinator", 178, "L178-L189",
+          "把已满且可提交的 token block 写入 prefix cache 索引。",
+          "Request、num_computed_tokens、各 KV group 的 blocks。",
+          "无返回；BlockPool 的 hash→block 映射与原 block hash 元数据被更新。",
+          "逐 group 交给 manager.cache_blocks；仅 full blocks 可缓存；null blocks 跳过；可选发布 BlockStored 事件。"],
+        [91, 6, "Scheduler", "Scheduler._preempt_request", "sync", "vllm/v1/core/sched/scheduler.py", "Scheduler", 961, "L961-L981",
+          "在 KV 不足时释放被抢占请求资源并放回 waiting。",
+          "Request、当前时间戳、scheduling policy。",
+          "无返回；请求状态变为 PREEMPTED，computed tokens 归零，已从 running 移除。",
+          "free KV/encoder cache；重置 speculative tokens；增加 num_preemptions；prepend 到 waiting；记录 PREEMPTED 事件。"],
+        [92, 6, "Scheduler.schedule", "SchedulerOutput builder", "sync", "vllm/v1/core/sched/output.py", "NewRequestData / CachedRequestData / SchedulerOutput", 31, "L31-L230",
+          "把本步调度决策序列化为 worker 可消费的 SchedulerOutput。",
+          "scheduled new/resumed/running requests、block ids、num_scheduled_tokens、encoder inputs、preemptions。",
+          "SchedulerOutput dataclass。",
+          "NewRequestData 带 prompt/params/block ids；CachedRequestData 带增量 token 与 block 更新；SchedulerOutput 汇总所有请求与本步全局信息。"],
+        [93, 6, "Scheduler.schedule", "Scheduler._update_after_schedule", "sync", "vllm/v1/core/sched/scheduler.py", "Scheduler", 983, "L983-L1007",
+          "在生成本步 output 后推进请求内部计数并清理 finished ids。",
+          "SchedulerOutput.num_scheduled_tokens、Request.num_computed_tokens。",
+          "无返回；每个 Request 的 computed token 数被推进，scheduler finished ids 清空。",
+          "先保留旧 output 用于 worker 输入定位，再推进状态；设置 is_prefill_chunk 与 structured-output 标志。"],
+        [94, 6, "EngineCore.step", "MultiprocExecutor.execute_model", "sync", "vllm/v1/executor/multiproc_executor.py", "MultiprocExecutor", 306, "L306-L316",
+          "把 SchedulerOutput 广播给 worker 执行模型。",
+          "scheduler_output、non_block=True、output_rank、KV output aggregator、执行超时。",
+          "Future[ModelRunnerOutput|None] 或同步结果。",
+          "collective_rpc 将 SchedulerOutput 发给所有 worker；只收集 output rank 结果；非阻塞返回 Future 供 EngineCore 与 grammar mask 并行。"],
+        [95, 6, "EngineCore.step", "Scheduler.get_grammar_bitmask", "sync", "vllm/v1/core/sched/scheduler.py", "Scheduler", 1280, "L1280-L1297",
+          "为 structured-output 请求生成本步 token grammar mask。",
+          "scheduler_output、requests、structured_output_manager、scheduled_spec_decode_tokens。",
+          "GrammarOutput(request_ids, bitmask) 或 None。",
+          "无 structured output 请求直接返回；筛选非 prefill-chunk 的 grammar 请求；调用 grammar manager 生成 bitmask。"],
+        [96, 6, "EngineCore.step", "future.result / sample_tokens branch", "sync", "vllm/v1/engine/core.py", "EngineCore", 422, "L422-L424",
+          "等待模型前向完成，并决定是否立即进入采样。",
+          "执行模型返回的 Future、grammar_output。",
+          "ModelRunnerOutput 或 None；None 时进入 model_executor.sample_tokens。",
+          "future.result 阻塞 EngineCore 进程；正常 forward 可只返回 None 并暂存 logits；采样阶段再生成 token。"],
+        [97, 7, "EngineCore", "MultiprocExecutor.collective_rpc", "ipc", "vllm/v1/executor/multiproc_executor.py", "MultiprocExecutor", 339, "L339-L403",
+          "向 worker 广播 RPC 方法并收集响应。",
+          "method 名、args、kwargs、timeout、unique_reply_rank、non_block、KV output aggregator。",
+          "output rank 的响应、Future 或所有 worker 响应列表。",
+          "方法/参数入 broadcast message queue；worker 执行；从 response queues 取响应；按 output rank 和 aggregator 缩减结果。"],
+        [98, 7, "Executor RPC", "Worker.execute_model", "sync", "vllm/v1/worker/gpu_worker.py", "Worker", 755, "L755-L843",
+          "在 worker 进程中执行一次模型 batch。",
+          "SchedulerOutput、pipeline parallel intermediate tensors、worker 的模型与 KV cache。",
+          "单个 rank 的 ModelRunnerOutput、AsyncModelRunnerOutput、IntermediateTensors 或 None。",
+          "等待上一步 PP send；非首 rank 接收 intermediate tensors；调用 model_runner.execute_model；首 rank 启动激活并执行。"],
+        [99, 7, "Worker", "GPUModelRunner.execute_model", "sync", "vllm/v1/worker/gpu_model_runner.py", "GPUModelRunner", 3770, "L3770-L4121",
+          "执行输入准备、MM encoder、模型前向和 logits 计算。",
+          "SchedulerOutput、intermediate tensors、持久化 input batch、KV block table、CUDA graph 配置。",
+          "None 并保留 ExecuteModelState，或直接返回 pooling/intermediate output。",
+          "更新状态；准备 inputs；确定 padding/CUDA graph；构造 attention metadata；执行 MM encoder；运行 model forward；计算 logits；暂存状态供采样。默认走顶部 GPUModelRunner；VLLM_USE_V2_MODEL_RUNNER=1 时切换到 vllm/v1/worker/gpu/model_runner.py。"],
+        [100, 7, "GPUModelRunner", "_update_states", "sync", "vllm/v1/worker/gpu_model_runner.py", "GPUModelRunner", 1059, "L1059-L1413",
+          "把 SchedulerOutput 中的请求变化同步到 worker 持久 batch。",
+          "scheduler_output、input_batch、requests map、block table。",
+          "无返回或延迟修正函数；持久 request state 更新。",
+          "移除 finished/preempted；添加新请求；更新 num_computed_tokens、block table、LoRA、encoder features、spec token 状态。"],
+        [101, 7, "GPUModelRunner.execute_model", "_prepare_inputs", "sync", "vllm/v1/worker/gpu_model_runner.py", "GPUModelRunner", 1774, "L1774-L2083",
+          "构造本步 token ids、positions、slot mappings 与 logits indices。",
+          "scheduler_output、num_scheduled_tokens、input_batch、block table、spec decode 配置。",
+          "logits_indices、SpecDecodeMetadata 或 None。",
+          "展开 request indices；计算 positions 和 token indices；构造 M-RoPE；写 input ids；建立 query/seq lengths；生成 block table slot mapping；标记要丢弃的 chunked-prefill 采样。"],
+        [102, 7, "_prepare_inputs", "BlockTable.compute_slot_mapping", "sync", "vllm/v1/worker/block_table.py", "BlockTable", 141, "L141-L200",
+          "把逻辑 token position 映射到 physical KV cache slot。",
+          "num_reqs、query_start_loc、positions、每请求 block ids/block table。",
+          "slot mapping tensor；供 attention backend 读写 KV cache。",
+          "按 request 与 position 找对应 block；slot = block_id * block_size + intra-block offset；写入预分配 slot buffer。"],
+        [103, 7, "GPUModelRunner.execute_model", "_build_attention_metadata", "sync", "vllm/v1/worker/gpu_model_runner.py", "GPUModelRunner", 2085, "L2085-L2700",
+          "构造各 attention backend 需要的 batch metadata。",
+          "num_tokens、num_reqs、query lengths、block tables、slot mappings、spec metadata、dtype/device 配置。",
+          "PerLayerAttnMetadata 与 CommonAttentionMetadata。",
+          "按 KV cache group/backend 组装 seq starts/lens、block table、slot mapping、cascade attention 前缀长度与 spec decode 元数据。"],
+        [104, 7, "GPUModelRunner.execute_model", "_preprocess", "sync", "vllm/v1/worker/gpu_model_runner.py", "GPUModelRunner", 3193, "L3193-L3309",
+          "选择 token input 或 embedding input，并准备模型 kwargs。",
+          "scheduler_output、num_input_tokens、intermediate_tensors、MM/prompt embeds 配置。",
+          "input_ids、inputs_embeds、positions、intermediate_tensors、model_kwargs、EC connector output。",
+          "多模态模型先执行 MM encoder/gather 并 embed input ids；prompt embeds 路径填充 embeds；纯文本模型传 input_ids。"],
+        [105, 7, "_preprocess", "GPUModelRunner._execute_mm_encoder", "sync", "vllm/v1/worker/gpu_model_runner.py", "GPUModelRunner", 2715, "L2715-L2897",
+          "对 scheduler 指定的多模态 items 执行 encoder。",
+          "scheduled_encoder_inputs、MultiModalFeatureSpec、encoder cache、LoRA tower/connector 配置。",
+          "encoder output tensors；同时写入 encoder_cache[mm_hash]。",
+          "按 modality 批量；设置 tower/connector LoRA；调用 encoder CUDA graph 或 model.embed_multimodal；sanity check；缓存结果。"],
+        [106, 7, "MM encoder", "model.embed_multimodal", "gpu", "vllm/v1/worker/gpu_model_runner.py", "GPUModelRunner", 2861, "L2861-L2895",
+          "执行视觉/音频等 modality encoder 的模型计算。",
+          "批处理后的 mm_kwargs_batch、encoder CUDA graph runtime 或 eager model。",
+          "每个 mm item 的 embedding tensor/list。",
+          "优先用支持该 modality 的 encoder CUDA graph；否则调用 model.embed_multimodal；输出按 mm_hash 缓存供后续请求复用。"],
+        [107, 7, "_preprocess", "GPUModelRunner._gather_mm_embeddings", "sync", "vllm/v1/worker/gpu_model_runner.py", "GPUModelRunner", 2899, "L2899-L3000",
+          "把 encoder cache 内容放回 prompt 对应 token 区间。",
+          "scheduler_output、input_batch req states、mm_placeholders、encoder_cache。",
+          "mm_embeds 列表与 is_mm_embed bool mask。",
+          "判断本步 token range 是否与 placeholder overlap；从 cache 切片；生成 mask；处理 M-RoPE/XD-RoPE 重算。"],
+        [108, 7, "MM preprocessing", "model.embed_input_ids", "gpu", "vllm/v1/worker/gpu_model_runner.py", "GPUModelRunner", 3214, "L3214-L3235",
+          "把文本 token 与多模态 embedding 合成统一 inputs_embeds。",
+          "本步 input token ids、mm_embeds、is_mm_embed mask、embedding model。",
+          "inputs_embeds tensor。",
+          "文本 token 通过 embedding layer；MM 位置用 encoder output 替换；统一 soft token 输入供 decoder forward。"],
+        [109, 7, "GPUModelRunner.execute_model", "_model_forward", "sync", "vllm/v1/worker/gpu_model_runner.py", "GPUModelRunner", 3483, "L3483-L3513",
+          "统一调用底层 transformer 模型。",
+          "input_ids、positions、intermediate_tensors、inputs_embeds、额外 model_kwargs。",
+          "模型 hidden states 或 PP intermediate tensors。",
+          "runner 把准备好的 batch tensor 和 static forward context 传给 self.model；文本走 input_ids，多模态/embeds 走 inputs_embeds。"],
+        [110, 7, "vLLM runner", "self.model(...)", "gpu", "vllm/v1/worker/gpu_model_runner.py", "GPUModelRunner", 3507, "L3507-L3513",
+          "执行 transformer 主模型前向。",
+          "input_ids/inputs_embeds、positions、intermediate_tensors、attention metadata、KV cache slot mappings。",
+          "hidden states；PP 非末阶段可能返回 IntermediateTensors。",
+          "各 transformer layer 执行 attention、MLP、残差与 RMSNorm；attention backend 使用 slot mapping 更新/读取 KV cache。"],
+        [111, 7, "GPUModelRunner.execute_model", "model.compute_logits", "gpu", "vllm/v1/worker/gpu_model_runner.py", "GPUModelRunner", 4070, "L4070-L4071",
+          "把需要采样的 hidden states 投影成 vocabulary logits。",
+          "hidden_states[logits_indices]、lm_head/parallel lm head 配置。",
+          "每请求的 logits tensor。",
+          "只选择 logits_indices 对应位置，避免对整个序列做 lm_head；PP 广播时可能再跨 rank 传播 logits。"],
+        [112, 7, "GPUModelRunner.execute_model", "ExecuteModelState / return None", "sync", "vllm/v1/worker/gpu_model_runner.py", "GPUModelRunner", 4102, "L4102-L4121",
+          "暂存 forward 阶段结果，等待 sample_tokens 阶段。",
+          "scheduler_output、logits、hidden states、spec metadata、slot mappings、connector/encoder output、CUDA graph stats。",
+          "None；状态保存在 self.execute_model_state。",
+          "为何拆成两段：让 EngineCore 可在 forward 后、采样前生成/更新 grammar mask，并支持异步调度。"],
+        [113, 8, "EngineCore.step", "model_executor.sample_tokens", "sync", "vllm/v1/engine/core.py", "EngineCore", 416, "L416-L424",
+          "在 forward future 返回 None 后启动采样阶段。",
+          "grammar_output、executor 中的 ExecuteModelState、spec decode 配置。",
+          "ModelRunnerOutput 或 Future。",
+          "EngineCore 把 grammar mask 传给 worker；worker 解包 logits 状态并进入 Sampler。"],
+        [114, 8, "Worker", "Worker.sample_tokens", "sync", "vllm/v1/worker/gpu_worker.py", "Worker", 748, "L748-L752",
+          "worker 层同步包装采样阶段。",
+          "GrammarOutput 或 None。",
+          "model_runner.sample_tokens 的 ModelRunnerOutput/AsyncModelRunnerOutput。",
+          "Worker 不自行处理 logits；直接调用 GPUModelRunner.sample_tokens。"],
+        [115, 8, "Worker", "GPUModelRunner.sample_tokens", "sync", "vllm/v1/worker/gpu_model_runner.py", "GPUModelRunner", 4123, "L4123-L4220",
+          "消费 forward 暂存状态并生成 sampled token ids。",
+          "grammar_output、execute_model_state、input_batch、Sampler/speculation 状态。",
+          "ModelRunnerOutput，含 request ids、sampled token ids、logprobs、prompt logprobs 与 connector output。",
+          "解包 state；应用 grammar bitmask；调用 _sample；回写采样 token；执行 speculative draft proposal；最后返回输出。"],
+        [116, 8, "sample_tokens", "apply_grammar_bitmask", "gpu", "vllm/v1/structured_output/utils.py", "模块级函数", 44, "L44-L120",
+          "在采样前屏蔽 grammar 不允许的 token。",
+          "scheduler_output、GrammarOutput、input_batch、logits、token id 映射。",
+          "原地修改后的 logits。",
+          "对每个 structured-output request 把 grammar bitmask 转为 -inf mask；支持普通 vocab 与 padded/tensor 形式。"],
+        [117, 8, "GPUModelRunner.sample_tokens", "_sample", "sync", "vllm/v1/worker/gpu_model_runner.py", "GPUModelRunner", 3311, "L3311-L3339",
+          "选择普通 Sampler 或 speculative rejection sampler。",
+          "logits、spec_decode_metadata、input_batch.sampling_metadata、async draft token 状态。",
+          "SamplerOutput。",
+          "普通 decode 直接调用 Sampler；spec decode 调用 RejectionSampler，并利用 draft logits 接受/拒绝 token。"],
+        [118, 8, "Sampler", "Sampler.forward", "gpu", "vllm/v1/sample/sampler.py", "Sampler", 68, "L68-L143, L357-L410",
+          "对 logits 执行过滤、惩罚、温度与采样。",
+          "logits、SamplingMetadata、predict_bonus_token、logprobs mode。",
+          "SamplerOutput(sampled_token_ids, logprobs_tensors)。",
+          "保存 raw logprobs；转 float32；应用 allowed ids/bad words/处理器/penalties；调用 sample；收集 logprobs；输出 int32 token ids。"],
+        [119, 8, "Sampler", "Sampler.sample", "gpu", "vllm/v1/sample/sampler.py", "Sampler", 232, "L232-L288",
+          "在 greedy 与随机采样之间按 temperature 选择实际 token。",
+          "处理后的 logits、temperature、all_greedy/all_random、top_k/top_p、RNG generators。",
+          "sampled token ids 与可选 processed logprobs。",
+          "全 greedy 直接 argmax；否则应用 temperature、argmax-invariant processors、top-k/top-p；最后按 temperature 合并 greedy/random 结果。"],
+        [120, 8, "Sampler.sample", "TopKTopPSampler", "gpu", "vllm/v1/sample/ops/topk_topp_sampler.py", "TopKTopPSampler", 22, "L22-L200",
+          "执行 top-k/top-p 截断与随机 token 采样。",
+          "logits、per-request generators、top_k、top_p。",
+          "random_sampled token ids 与 processed logprobs（可选）。",
+          "按 backend 选择 Triton/FlashInfer 等实现；对每个请求参数应用概率截断；从剩余分布中采样。"],
+        [121, 8, "Sampler.forward", "SamplerOutput", "sync", "vllm/v1/outputs.py", "SamplerOutput", 118, "L118-L130",
+          "封装采样 token 与 logprob tensor。",
+          "sampled token ids、logprobs tensors。",
+          "SamplerOutput dataclass。",
+          "sampled token ids 扩展为 [num_requests, 1]；logprobs 以 GPU tensor 返回，避免过早 CPU 同步。"],
+        [122, 8, "sample_tokens", "GPUModelRunner._bookkeeping_sync", "sync", "vllm/v1/worker/gpu_model_runner.py", "GPUModelRunner", 3341, "L3341-L3482",
+          "把 sampled tokens 与 logprobs 的轻量结果整理为 CPU/请求级输出。",
+          "scheduler_output、SamplerOutput、logits、hidden_states、spec metadata、num scheduled tokens。",
+          "sampled token ids list、logprobs lists、prompt logprobs、NaNs、request id mappings。",
+          "处理 discard mask；异步模式下缓存 GPU token 以延后同步；同步模式下转 list；更新 input batch 与 draft 状态。"],
+        [123, 8, "model runner", "ModelRunnerOutput", "sync", "vllm/v1/outputs.py", "ModelRunnerOutput", 166, "L166-L230",
+          "封装 worker 执行结果并通过 RPC 返回 EngineCore。",
+          "req_ids、req_id_to_index、sampled_token_ids、logprobs、prompt_logprobs、pooler_output、KV connector output。",
+          "ModelRunnerOutput。",
+          "worker 只返回 output rank 结果；executor 聚合 KV connector 输出后交给 EngineCore."],
+        [124, 8, "EngineCore.step", "Scheduler.update_from_output", "sync", "vllm/v1/core/sched/scheduler.py", "Scheduler", 1299, "L1299-L1560",
+          "把模型采样结果转成调度器状态变化与 EngineCoreOutput。",
+          "SchedulerOutput、ModelRunnerOutput、spec/KV connector/stats 信息。",
+          "dict[int, EngineCoreOutputs]。",
+          "按 request 找 index；处理 spec accepted/rejected；append tokens；check stop；处理 structured output；释放完成请求；附加 logprobs/prefill stats。"],
+        [125, 8, "update_from_output", "Scheduler._update_request_with_output", "sync", "vllm/v1/core/sched/scheduler.py", "Scheduler", 1631, "L1631-L1647",
+          "逐 token 更新 Request 并检查停止条件。",
+          "Request、new_token_ids、max_model_len。",
+          "截断后的 token ids、stopped bool。",
+          "逐个 append output_token_ids；每 token 调用 check_stop；若 stop 则删除后续 spec/new tokens 并终止本请求。"],
+        [126, 8, "Request", "check_stop", "sync", "vllm/v1/core/sched/utils.py", "模块级函数", 94, "L94-L130",
+          "判断请求是否因 token、EOS、stop token 或重复模式结束。",
+          "Request、SamplingParams、max_model_len。",
+          "bool；若结束则设置 RequestStatus 与 stop_reason。",
+          "先满足 min_tokens；检查 EOS/stop_token_ids；再检查 max_model_len/max_tokens；最后执行 repetition detection。"],
+        [127, 8, "update_from_output", "EngineCoreOutput(...)", "sync", "vllm/v1/engine/__init__.py", "EngineCoreOutput", 154, "L154-L198",
+          "封装单个请求本步输出与完成信息。",
+          "request_id、new_token_ids、finish_reason、stop_reason、logprobs、prefill_stats、KV params、trace headers。",
+          "EngineCoreOutput。",
+          "只有 new tokens、pooling output、kv params 或 stopped 时才生成输出；prefill stats 用于 cached_tokens。"],
+        [128, 8, "EngineCoreProc", "EngineCoreOutputs → ZMQ output", "ipc", "vllm/v1/engine/core.py", "EngineCoreProc", 802, "L802-L1906",
+          "把本步 engines 输出按前端 client 分组发送回 API 进程。",
+          "各 client 的 EngineCoreOutput、scheduler stats、finished request ids。",
+          "ZMQ output frames；AsyncMPClient 解码为 EngineCoreOutputs。",
+          "EngineCore 按 client_index 组装 outputs；输出 socket 发送；API 进程 process_outputs_socket 接收并放入 outputs_queue。"],
+        [129, 9, "AsyncMPClient", "process_outputs_socket", "async", "vllm/v1/engine/core_client.py", "AsyncMPClient", 942, "L942-L999",
+          "持续从 EngineCore output socket 拉取解码后的输出。",
+          "ZMQ output socket、msgpack decoder、utility result map、outputs_queue。",
+          "EngineCoreOutputs 放入 asyncio queue；异常放入队列并最终转 EngineDeadError。",
+          "独立 asyncio task 循环 recv_multipart；decode；处理 utility output；必要时调用组合输出 handler；将业务输出 queue.put_nowait。"],
+        [130, 9, "AsyncLLM", "_run_output_handler.output_handler", "async", "vllm/v1/engine/async_llm.py", "AsyncLLM", 634, "L634-L704",
+          "API 进程后台消费 EngineCoreOutputs 并分发到每个请求队列。",
+          "EngineCoreClient、OutputProcessor、logger manager、renderer MM stats、chunk size。",
+          "无直接返回值；持续把 RequestOutput 放入对应 collector。",
+          "await get_output_async；分 chunk 调 process_outputs；对 stop-string finished 请求 abort EngineCore；更新 stats 和 MM cache stats。"],
+        [131, 9, "output handler", "OutputProcessor.process_outputs", "sync", "vllm/v1/engine/output_processor.py", "OutputProcessor", 572, "L572-L687",
+          "把 EngineCoreOutput 转成文本、logprobs 与 RequestOutput。",
+          "EngineCoreOutput 列表、engine timestamp、IterationStats。",
+          "OutputProcessorOutput，主要含 reqs_to_abort；RequestOutput 已 put 到每请求 queue。",
+          "逐 output 取 RequestState；更新 stats/cached tokens；detokenize；update logprobs；构造 RequestOutput；完成状态时释放状态。"],
+        [132, 9, "process_outputs", "IncrementalDetokenizer.update", "sync", "vllm/v1/engine/detokenizer.py", "BaseIncrementalDetokenizer", 95, "L95-L142",
+          "把新 token 增量转成文本，并检测 stop string。",
+          "new_token_ids、stop_terminated、stop strings、min_tokens、include_stop_str_in_output。",
+          "匹配到的 stop string 或 None；detokenizer 内部 token/text buffer 更新。",
+          "逐 token decode；如已因 stop token 结束且不输出 stop string，则跳过最后 token；检查 min_tokens 和 stop strings；必要时截断 output_text。"],
+        [133, 9, "process_outputs", "LogprobsProcessor.update_from_output", "sync", "vllm/v1/engine/logprobs.py", "LogprobsProcessor", 348, "L348-L390",
+          "处理 sampled token 与 prompt token 的 logprobs。",
+          "EngineCoreOutput 的 new_logprobs/new_prompt_logprobs_tensors、token ids、SamplingParams。",
+          "更新后的 request-level logprobs 与 cumulative logprob。",
+          "按输出 token 数切片 logprobs；整理 top logprobs 结构；prompt logprobs 保留到 RequestOutput。"],
+        [134, 9, "process_outputs", "RequestState.make_request_output", "sync", "vllm/v1/engine/output_processor.py", "RequestState", 269, "L269-L331",
+          "根据 output_kind 与 finish 状态构造每请求 RequestOutput。",
+          "new_token_ids、pooling_output、finish_reason、stop_reason、kv_transfer_params、routed_experts。",
+          "RequestOutput 或 PoolingRequestOutput；FINAL_ONLY 未完成时返回 None。",
+          "DELTA 只取新增文本/token；FINAL_ONLY 未结束则丢弃；完成输出带 finish reason；n>1 时让 parent 聚合 outputs。"],
+        [135, 9, "make_request_output", "RequestOutputCollector.put", "sync", "vllm/v1/engine/output_processor.py", "RequestOutputCollector", 62, "L62-L76",
+          "把 RequestOutput 送入每请求异步消费队列。",
+          "RequestOutput 或 Exception。",
+          "无返回；若已有输出则 DELTA 聚合或 FINAL_ONLY 替换；ready Event 唤醒消费者。",
+          "non-blocking put；异常优先级高；不同 request index 的 n>1 输出不会互相覆盖。"],
+        [136, 9, "AsyncLLM.generate", "q.get_nowait / await q.get", "async", "vllm/v1/engine/async_llm.py", "AsyncLLM", 570, "L570-L583",
+          "从 collector 拉取输出并决定是否结束 generator。",
+          "RequestOutputCollector、finished flag。",
+          "RequestOutput；finished 为真后退出循环。",
+          "优先 get_nowait 减少 task switch；无输出则 await get；跳过 STREAM_FINISHED sentinel。"],
+        [137, 9, "AsyncLLM.generate", "yield RequestOutput", "async_gen", "vllm/v1/engine/async_llm.py", "AsyncLLM", 523, "L523-L632",
+          "把 engine 层输出交给 chat 响应 generator。",
+          "RequestOutput，含 text/token_ids/logprobs/finish_reason/num_cached_tokens。",
+          "每次迭代一个 RequestOutput；最终请求结束后 stop。",
+          "generator 被取消或关闭时调用 abort；EngineDeadError/ValueError/EngineGenerateError 按类型向上传。"],
+        [138, 9, "stream branch", "chat_completion_stream_generator", "async", "vllm/entrypoints/openai/chat_completion/serving.py", "OpenAIServingChat", 518, "L518-L1256",
+          "消费 DELTA RequestOutput 并生成 SSE chat.completion.chunk。",
+          "request、result_generator、request_id、model_name、conversation、tokenizer、metadata、reasoning_parser。",
+          "AsyncGenerator[str]；每条 yield 是 data: JSON 或 [DONE]。",
+          "初始化 choice 状态；首包发送 role；循环 output 计算 delta；经 parser 输出 content/tool/reasoning；结束发 finish/usage/[DONE]。"],
+        [139, 9, "stream generator", "first role chunk", "sync", "vllm/entrypoints/openai/chat_completion/serving.py", "OpenAIServingChat", 637, "L637-L716",
+          "发送流式响应第一个 role-only chunk。",
+          "首个 RequestOutput、request.n、request.echo、return_token_ids、continuous usage 配置。",
+          "ChatCompletionStreamResponse 列表；每个 choice 一个 role delta。",
+          "首个输出时记录 num_cached_tokens；构造 role 为空字符串、content 为空字符串的 delta；可选 echo 最后一条同 role 消息；可带 prompt_token_ids。"],
+        [140, 9, "stream generator", "reasoning/tool/Harmony parser", "sync", "vllm/entrypoints/openai/chat_completion/serving.py", "OpenAIServingChat", 748, "L748-L996",
+          "把模型原始 delta 拆分为 content、reasoning 和 tool_calls。",
+          "delta_text、token ids、previous text/token ids、request、res.prompt_token_ids、parser 实例。",
+          "DeltaMessage 或 None；可能更新 parser 的累计状态。",
+          "Harmony 使用 channel/recipient 状态机；Mistral grammar 合并 reasoning/tool parser；普通 parser 逐 token 解析 JSON；暂时不完整时可跳过 chunk。"],
+        [141, 9, "stream generator", "chunk.model_dump_json", "sync", "vllm/entrypoints/openai/chat_completion/serving.py", "OpenAIServingChat", 1176, "L1176-L1194",
+          "序列化一个 chat completion chunk。",
+          "ChatCompletionStreamResponse、exclude_unset 配置、continuous usage。",
+          "JSON 字符串。",
+          "Pydantic model_dump_json；exclude_unset 保留 OpenAI 兼容字段语义；continuous usage 时附加累计 usage。"],
+        [142, 9, "stream generator", "yield SSE data", "sse", "vllm/entrypoints/openai/chat_completion/serving.py", "OpenAIServingChat", 1193, "L1193-L1194",
+          "把 JSON chunk 包装成 SSE 事件发送。",
+          "JSON 字符串。",
+          "data: <json>\n\n 文本片段。",
+          "StreamingResponse 逐 chunk 发送；媒体类型为 text/event-stream。"],
+        [143, 9, "stream generator", "finish/tool rewrite/final usage", "sync", "vllm/entrypoints/openai/chat_completion/serving.py", "OpenAIServingChat", 1073, "L1073-L1229",
+          "处理最终 finish reason、tool calls 与 usage-only chunk。",
+          "output.finish_reason、parser 状态、request.tool_choice、previous_num_tokens、res.num_cached_tokens。",
+          "最终 choice chunk、可选 usage chunk。",
+          "finish_reason=error 抛 GenerationError；auto/required tool calls 改写 tool_calls；tool args 尾部补齐；include_usage 时发 choices=[] 的 usage chunk。"],
+        [144, 9, "stream generator", "yield [DONE]", "sse", "vllm/entrypoints/openai/chat_completion/serving.py", "OpenAIServingChat", 1255, "L1255-L1256",
+          "发送 SSE 结束标记。",
+          "无；仅表示 generator 结束。",
+          "data: [DONE]\n\n。",
+          "无论正常完成、GenerationError 或未知异常，最终都会发送 [DONE]；错误会先作为前一个 SSE 事件发出。"],
+        [145, 9, "full branch", "chat_completion_full_generator", "async", "vllm/entrypoints/openai/chat_completion/serving.py", "OpenAIServingChat", 1258, "L1258-L1286",
+          "消费 engine generator 的最终输出并构造完整响应。",
+          "request、result_generator、request_id、model_name、conversation、tokenizer、metadata、reasoning_parser。",
+          "ChatCompletionResponse 或 ErrorResponse。",
+          "async for 只保留 final_res；无输出时返回 500；捕获 client cancel 后返回 Client disconnected。"],
+        [146, 9, "full generator", "OpenAIServing._raise_if_error", "sync", "vllm/entrypoints/openai/engine/serving.py", "OpenAIServing", 385, "L385-L392",
+          "把 output.finish_reason=error 转为 GenerationError。",
+          "finish_reason、request_id。",
+          "正常返回；error 时抛 GenerationError(\"Internal server error\")。",
+          "用于 full generator 每个 output 和 stream finish 阶段；避免把 error finish 当普通 stop 返回。"],
+        [147, 9, "full generator", "answer builder / parsers", "sync", "vllm/entrypoints/openai/chat_completion/serving.py", "OpenAIServingChat", 1300, "L1300-L1580",
+          "构造完整 message，包括 content、reasoning、tool_calls 与 finish_reason。",
+          "final_res.outputs、request、tokenizer、reasoning parser、tool parser、logprobs。",
+          "ChatCompletionResponseChoice 列表。",
+          "Harmony 或因 reasoning parser 拆分文本；从 content 解析 tool calls；按 tool_choice 生成 id/function；auto tools 时设置 finish_reason=tool_calls。"],
+        [148, 9, "full generator", "usage calculation", "sync", "vllm/entrypoints/openai/chat_completion/serving.py", "OpenAIServingChat", 1597, "L1597-L1614",
+          "计算 prompt、completion、total 与可选 cached tokens。",
+          "final_res.prompt_token_ids、encoder_prompt_token_ids、outputs token_ids、num_cached_tokens、enable_prompt_tokens_details。",
+          "UsageInfo。",
+          "completion 汇总所有 choices；prompt 加 encoder 长度；total=prompt+completion；cached tokens 非零且功能开启时设置。"],
+        [149, 9, "full generator", "ChatCompletionResponse(...)", "sync", "vllm/entrypoints/openai/chat_completion/protocol.py", "ChatCompletionResponse", 97, "L97-L112",
+          "构造非流式 OpenAI 兼容响应对象。",
+          "id、created、model、choices、usage、prompt_logprobs、prompt_token_ids、kv_transfer_params。",
+          "ChatCompletionResponse 实例。",
+          "统一 object=chat.completion；包含 choices 和 usage；vLLM 扩展字段按请求选择是否出现。"],
+        [150, 9, "route", "JSONResponse(generator.model_dump())", "sync", "vllm/entrypoints/openai/chat_completion/api_router.py", "模块级函数", 63, "L63-L72",
+          "把完整响应对象转成 HTTP JSON 响应。",
+          "ChatCompletionResponse 或 ErrorResponse；可选 endpoint load metrics header。",
+          "JSONResponse；非流式响应带 metrics header。",
+          "model_dump 转 dict；错误响应使用 error.code 作为 HTTP status。"],
+        [151, 9, "FastAPI", "send ASGI response / decrement_server_load", "async", "vllm/entrypoints/utils.py", "模块级函数 / ASGI runtime", 101, "L101-L150",
+          "发送 HTTP 响应并清理 server load tracking。",
+          "Response body/iterator、ASGI send、background task。",
+          "客户端收到 JSON 或 SSE；server_load_metrics 减一。",
+          "普通 JSON 直接发送完整 body；SSE 由 StreamingResponse 持续发送；load_aware_call 绑定 background/客户端断连清理。"],
+        [152, 9, "with_cancellation", "AsyncLLM cancel / abort", "async", "vllm/v1/engine/async_llm.py", "AsyncLLM", 585, "L585-L718",
+          "客户端断开或响应取消时停止 engine 请求并释放状态。",
+          "CancelledError/GeneratorExit、内部 request ID。",
+          "重新抛出取消；EngineCore 收到 ABORT；KV/encoder cache 由调度器释放。",
+          "generate 捕获取消后 await abort；OutputProcessor 移除 request state；AsyncMPClient 发送 ABORT；scheduler.finish_requests 清理 running/waiting。"],
+      ];
+
+      const AUDIT_STEPS = [
+        {
+          id: "A1",
+          stage: 10,
+          caller: "render_chat",
+          callee: "_make_request_with_harmony",
+          mode: "sync",
+          file: "vllm/entrypoints/serve/render/serving.py",
+          cls: "OpenAIServingRender",
+          startLine: 392,
+          lineLabel: "L392-L434",
+          purpose: "补充 Harmony/GPT-OSS 专用预处理分支。",
+          inputs: "ChatCompletionRequest、reasoning_effort、tools、messages。",
+          outputs: "Harmony messages 与 tokens_input EngineInput。",
+          logic: [
+            "maybe_serialize_tool_calls 规范化 Pydantic 产出的 tool call 结构。",
+            "get_system_message 构造 system；有 tools 时 get_developer_message 构造 developer。",
+            "parse_chat_inputs_to_harmony_messages 转换用户消息，render_for_completion 生成 token ids。",
+            "用 tokens_input 包装 prompt tokens；返回后继续统一 SamplingParams 与 generate 流程。"
+          ],
+          next: "返回 create_chat_completion，继续 request_id、SamplingParams 与 engine generate。"
+        },
+        {
+          id: "A2",
+          stage: 10,
+          caller: "create_chat_completion",
+          callee: "OpenAIServing.beam_search",
+          mode: "async",
+          file: "vllm/entrypoints/openai/engine/serving.py",
+          cls: "OpenAIServing",
+          startLine: 160,
+          lineLabel: "L160-L357",
+          purpose: "补充 use_beam_search=true 的 Python 侧 beam 调度。",
+          inputs: "EngineInput、BeamSearchParams、request_id、LoRARequest、trace headers。",
+          outputs: "AsyncGenerator[RequestOutput]；最终包含 beam_width 个 outputs。",
+          logic: [
+            "读取 tokenizer、EOS 与 length penalty，初始 beam 只包含原 prompt。",
+            "每一步对每个 beam 调用 engine_client.generate，使用 max_tokens=1 和 2*beam_width logprobs。",
+            "并发 gather 所有 beam 输出，展开候选 token 与累计 logprob，处理 EOS，再保留 top beam_width。",
+            "循环结束后按 length penalty 排序，decode 最优 beams，并 yield 一个 finished RequestOutput。"
+          ],
+          next: "chat_completion_stream_generator 或 chat_completion_full_generator 消费该 final RequestOutput。"
+        },
+        {
+          id: "A3",
+          stage: 10,
+          caller: "Scheduler.schedule",
+          callee: "Scheduler._try_schedule_encoder_inputs",
+          mode: "sync",
+          file: "vllm/v1/core/sched/scheduler.py",
+          cls: "Scheduler",
+          startLine: 1112,
+          lineLabel: "L1112-L1270",
+          purpose: "补充多模态/encoder input 的调度预算与 cache 分配。",
+          inputs: "Request、num_computed_tokens、num_new_tokens、encoder compute budget。",
+          outputs: "需执行的 encoder input ids、调整后的 num_new_tokens、剩余 encoder budget。",
+          logic: [
+            "遍历 request.mm_features，检查 placeholder 与本步 token range 是否 overlap。",
+            "已处理完的 encoder input 从 encoder cache 释放；需要执行的 item 收集到 scheduled_encoder_inputs。",
+            "按 modality token 数扣减 encoder compute budget，并限制普通 token 调度数量。",
+            "分配 encoder cache 后把结果写入 SchedulerOutput，worker 才执行真正 encode。"
+          ],
+          next: "KVCacheManager.allocate_slots → GPUModelRunner._execute_mm_encoder。"
+        },
+        {
+          id: "A4",
+          stage: 10,
+          caller: "Scheduler.update_from_output",
+          callee: "_handle_stopped_request / _free_encoder_inputs / _free_request / _free_blocks",
+          mode: "sync",
+          file: "vllm/v1/core/sched/scheduler.py",
+          cls: "Scheduler",
+          startLine: 1588,
+          lineLabel: "L1588-L1843",
+          purpose: "补充请求完成后的 session、encoder、KV 与 request map 清理。",
+          inputs: "已 stopped 的 Request、RequestStatus、connector 完成状态。",
+          outputs: "是否真正 finished、释放后的 KV/encoder cache、kv_transfer_params。",
+          logic: [
+            "_handle_stopped_request 对 resumable streaming request 取下一段输入或进入 WAITING_FOR_STREAMING_REQ。",
+            "_free_encoder_inputs 判断 placeholder 是否已落入 decoder KV，再释放 encoder cache。",
+            "_connector_finished 给 KV connector 最后一次保存/传输机会，并可能延迟释放 blocks。",
+            "_free_request 标记 finished ids、释放 blocks 并从 requests map 删除；否则保留等待异步 KV transfer。"
+          ],
+          next: "EngineCoreOutput 携带 finish_reason / kv_transfer_params 返回 API 进程。"
+        },
+        {
+          id: "A5",
+          stage: 10,
+          caller: "EngineCore.step",
+          callee: "EngineCore._process_aborts_queue",
+          mode: "sync",
+          file: "vllm/v1/engine/core.py",
+          cls: "EngineCore",
+          startLine: 563,
+          lineLabel: "L563-L571",
+          purpose: "补充模型执行期间到达的异步 abort。",
+          inputs: "aborts_queue 中的 request id 列表。",
+          outputs: "scheduler.finish_requests(FINISHED_ABORTED) 产生的清理结果。",
+          logic: [
+            "execute_model 运行期间，API 进程的 ABORT 消息可继续进入 aborts_queue。",
+            "样本更新前先 drain aborts_queue，合并所有 request id。",
+            "调用 scheduler.finish_requests，释放 request/KV/encoder cache。",
+            "随后 update_from_output 跳过已 abort 请求，避免输出已取消请求。"
+          ],
+          next: "Scheduler.update_from_output。"
+        },
+        {
+          id: "A6",
+          stage: 10,
+          caller: "GPUModelRunner.execute_model",
+          callee: "GPUModelRunner._determine_batch_execution_and_padding",
+          mode: "sync",
+          file: "vllm/v1/worker/gpu_model_runner.py",
+          cls: "GPUModelRunner",
+          startLine: 3536,
+          lineLabel: "L3536-L3649",
+          purpose: "补充 CUDA graph、padding 与 data-parallel batch 协调。",
+          inputs: "num_tokens、num_reqs、num_scheduled_tokens、cascade attention、encoder 请求数。",
+          outputs: "cudagraph_mode、batch descriptor、是否 ubatch、跨 DP token 数、cudagraph stats。",
+          logic: [
+            "识别 uniform decode，并按 sequence parallel 要求对 token 数做 padding。",
+            "CUDAGraphDispatcher 根据 token 数、LoRA、uniform decode 选择 NONE/PIECEWISE/FULL 模式。",
+            "data parallel 时通过 coordinate_batch_across_dp 统一各 rank 的 padded token 数。",
+            "输出 batch descriptor 决定后续 kernel/graph 尺寸和 DP padding。"
+          ],
+          next: "attention metadata 构造 → _preprocess → _model_forward。"
+        },
+        {
+          id: "A7",
+          stage: 10,
+          caller: "GPUModelRunner.sample_tokens",
+          callee: "_update_states_after_model_execute / propose_draft_token_ids",
+          mode: "gpu",
+          file: "vllm/v1/worker/gpu_model_runner.py",
+          cls: "GPUModelRunner",
+          startLine: 4491,
+          lineLabel: "L4491-L4734；另见 L1414-L1457",
+          purpose: "补充 speculative decoding 的 draft 生成与 hybrid state 推进。",
+          inputs: "sampled token ids、hidden states、spec metadata、common attention metadata、slot mappings。",
+          outputs: "下一轮 draft_token_ids、valid sampled count、更新后的 hybrid/Mamba state。",
+          logic: [
+            "n-gram/suffix/EAGLE 等 proposer 根据当前 sampled tokens 与上下文生成候选 draft。",
+            "对 grammar 约束的 speculative tokens 做过滤，并记录 invalid token 数。",
+            "_update_states_after_model_execute 更新 accepted token 计数和 hybrid/Mamba 状态。",
+            "draft ids 复制到 CPU 后，下一步 scheduler.update_draft_token_ids 将其加入 Request。"
+          ],
+          next: "Scheduler.update_draft_token_ids → 下一轮 schedule/execute。"
+        },
+        {
+          id: "A8",
+          stage: 10,
+          caller: "Scheduler",
+          callee: "_build_kv_connector_meta / _update_from_kv_xfer_finished / _update_requests_with_invalid_blocks",
+          mode: "sync",
+          file: "vllm/v1/core/sched/scheduler.py",
+          cls: "Scheduler",
+          startLine: 956,
+          lineLabel: "L956-L959, L2005-L2303",
+          purpose: "补充 KV connector 的 load/store、异步完成和失败重算路径。",
+          inputs: "SchedulerOutput、KVConnectorOutput、invalid_block_ids、request block table。",
+          outputs: "connector metadata、finished_recving/finished_sending 状态、重算或错误结果。",
+          logic: [
+            "schedule 末尾 build_connector_meta，把本步 load/save 操作交给 connector。",
+            "worker 返回 finished_recving/finished_sending 后更新等待态或释放延迟 blocks。",
+            "invalid block ids 被映射回受影响请求，并把 computed token 数截断到最长有效前缀。",
+            "recompute policy 触发重新调度；否则把请求 finish 为 error。"
+          ],
+          next: "下一次 Scheduler.schedule；失败时生成 error EngineCoreOutput。"
+        },
+        {
+          id: "A9",
+          stage: 10,
+          caller: "OutputProcessor / AsyncLLM.output_handler",
+          callee: "propagate_error / _finish_request / _update_stats_from_output / _update_stats_from_finished / do_tracing",
+          mode: "sync",
+          file: "vllm/v1/engine/output_processor.py",
+          cls: "OutputProcessor",
+          startLine: 439,
+          lineLabel: "L439-L445, L689-L812",
+          purpose: "补充输出处理的统计、tracing、状态释放和全局错误传播。",
+          inputs: "EngineCoreOutput、IterationStats、RequestState、异常。",
+          outputs: "完成统计、tracing span、释放后的 request state；异常推送到所有 collector。",
+          logic: [
+            "_update_stats_from_output 记录 token timing、cached tokens、LoRA 状态等 iteration stats。",
+            "请求 finish 时 _update_stats_from_finished 汇总 request 级别统计并更新 parent。",
+            "tracing 开启时 do_tracing 产生 llm_request span，记录 TTFT、queue/prefill/decode 时间。",
+            "_finish_request 清理 request/external/parent 映射；output_handler 异常通过 propagate_error 推给全部请求。"
+          ],
+          next: "RequestOutput/异常写回 collector；请求结束后 stats/tracing 完成。"
+        },
+        {
+          id: "A10",
+          stage: 10,
+          caller: "chat_completion_stream_generator",
+          callee: "_should_check_for_unstreamed_tool_arg_tokens / _create_remaining_args_delta / maybe_filter_parallel_tool_calls",
+          mode: "sync",
+          file: "vllm/entrypoints/openai/chat_completion/serving.py",
+          cls: "OpenAIServingChat",
+          startLine: 1767,
+          lineLabel: "L1767-L1818；另见 openai/utils.py L22-L40",
+          purpose: "补充工具参数尾差补发与 parallel_tool_calls 过滤。",
+          inputs: "delta_message、CompletionOutput.finish_reason、tool_parser.prev_tool_call_arr、streamed_args_for_tool。",
+          outputs: "补齐剩余 arguments 的 DeltaMessage；必要时只保留 index=0 的 tool call。",
+          logic: [
+            "工具流结束时检查 partial parser 已看到但尚未 stream 的参数 token。",
+            "用 expected_call 去掉 actual_call，构造 remaining args delta，保留原 id/type/name。",
+            "parallel_tool_calls=false 时，stream choice 只保留 index=0 的 tool call。",
+            "补齐后的 delta 随最终 finish_reason=tool_calls chunk 一起发送。"
+          ],
+          next: "yield 最终 tool_calls chunk → data: [DONE]。"
+        },
+        {
+          id: "A11",
+          stage: 10,
+          caller: "chat_completion_full_generator",
+          callee: "clamp_prompt_logprobs",
+          mode: "sync",
+          file: "vllm/entrypoints/openai/engine/serving.py",
+          cls: "模块级函数",
+          startLine: 749,
+          lineLabel: "L749-L761",
+          purpose: "补充非流式 prompt logprobs 的 -inf 规范化。",
+          inputs: "RequestOutput.prompt_logprobs。",
+          outputs: "所有 -inf 被替换成 OpenAI 可表示下限 -9999.0 的 prompt logprobs。",
+          logic: [
+            "prompt_logprobs 为 None 时直接返回。",
+            "逐 token logprob dict 遍历。",
+            "遇到 -inf 时改写为 -9999.0。",
+            "结果写入 ChatCompletionResponse.prompt_logprobs。"
+          ],
+          next: "ChatCompletionResponse(...) → JSONResponse。"
+        }
+      ];
+
+      const steps = RAW_STEPS.map((row) => ({
+        id: row[0],
+        stage: row[1],
+        caller: row[2],
+        callee: row[3],
+        mode: row[4],
+        file: row[5],
+        cls: row[6],
+        startLine: row[7],
+        lineLabel: row[8],
+        purpose: row[9],
+        inputs: row[10],
+        outputs: row[11],
+        logic: row[12]
+      })).concat(AUDIT_STEPS);
+
+      const stageMap = new Map(STAGES.map(([id, title, tech]) => [id, { id, title, tech }]));
+      const stepMap = new Map(steps.map((step) => [step.id, step]));
+      const NEXT_OVERRIDES = {
+        3: "通过：FastAPI → validate_json_request；失败：AuthenticationMiddleware 返回 401 并结束。",
+        7: "handler 先完成：继续步骤 08；客户端先断开：取消 handler，并沿 AsyncLLM abort 路径清理。",
+        15: "模型有效：OpenAIServingRender.render_chat；模型无效：返回 404 ErrorResponse。",
+        20: "模板可信：preprocess_chat；模板不可信：返回 400 ErrorResponse。",
+        58: "stream=true：chat_completion_stream_generator（步骤 138）；stream=false：chat_completion_full_generator（步骤 145）。",
+        137: "流式分支进入步骤 138；非流式分支进入步骤 145。",
+        144: "客户端收到 data: [DONE]；流式请求生命周期结束。",
+        151: "客户端收到完整 JSON；非流式请求生命周期结束。",
+        152: "取消继续向上传播；EngineCore 与 API 侧状态清理完成后结束。"
+      };
+
+      const LOGIC_PHASE_1 = {
+        1: [
+          "Uvicorn 接收 TCP 字节流，构造 ASGI scope、receive 与 send。",
+          "此时业务层尚未读取 body；认证、Content-Type 校验和 Pydantic 解析都在后续阶段。",
+          "请求生命周期内保留 raw request，用于取消监听、请求 ID 和 middleware 元数据。"
+        ],
+        2: [
+          "Starlette 按 middleware 注册的逆序构建外层到内层调用栈。",
+          "CORS 处理跨域与 OPTIONS；AuthenticationMiddleware 校验 /v1 请求；XRequestId 准备响应 ID。",
+          "ScalingMiddleware 在弹性扩缩容中直接返回 503；全部通过后才进入 FastAPI 路由。"
+        ],
+        3: [
+          "OPTIONS 请求或非 /v1 路径直接跳过认证。",
+          "解析 Authorization 为 Bearer scheme，并对参数 token 计算 SHA-256。",
+          "逐个使用 secrets.compare_digest 做常量时间比较；任一枚举失败即返回 401。"
+        ],
+        4: [
+          "读取 content-type header，并去掉 charset 等分号后的参数。",
+          "只有 application/json 通过；其它 media type 抛出 RequestValidationError。",
+          "全局 validation_exception_handler 将依赖错误转换为 400 OpenAI error 响应。"
+        ],
+        5: [
+          "Pydantic 按字段类型解析 messages、model、stream、tools 和采样参数。",
+          "before validator 先把一次性 tool_calls 迭代器物化为 list，避免 union 匹配时被消费。",
+          "缺失的 request_id、stream 等字段补默认值，最终生成 ChatCompletionRequest 实例。"
+        ],
+        6: [
+          "校验 stream_options 只能与 stream=true 一起出现，且流式请求不能要求 prompt logprobs。",
+          "校验 top_logprobs 与 logprobs 的依赖、tool_choice 与 tools 的匹配关系。",
+          "校验 structured_outputs 只能选择一种约束，以及 continue_final_message 与 add_generation_prompt 互斥。",
+          "校验 cache_salt 非空；对 system 消息中的多模态内容只记录 warning。"
+        ],
+        7: [
+          "同时创建 handler task 和 listen_for_disconnect task。",
+          "使用 asyncio.wait(FIRST_COMPLETED) 等待任一任务结束，并取消其余 pending task。",
+          "handler 先完成则传播其返回值或异常；断连先完成则取消 handler。"
+        ],
+        8: [
+          "确认 app.state 是否启用 server_load_tracking，并按需初始化计数器。",
+          "进入 handler 前递增计数；handler 抛异常时立即递减并继续抛出。",
+          "JSONResponse/StreamingResponse 通过 background task 在响应结束后递减；其它响应立即递减。"
+        ],
+        9: [
+          "读取 endpoint-load-metrics-format 请求头。",
+          "通过 chat dependency 从 app.state 获取 OpenAIServingChat；缺失时抛 501。",
+          "等待 handler.create_chat_completion；ErrorResponse、完整响应和 AsyncGenerator 分别映射为 JSON 或 SSE。"
+        ],
+        10: [
+          "直接读取 app.state.openai_serving_chat。",
+          "该 handler 在 init_generate_state 中创建，并在应用启动阶段完成 warmup。",
+          "返回 None 表示当前模型任务不支持 Chat Completions。"
+        ],
+        11: [
+          "创建 reasoning parser，并合并服务默认与请求级 chat template kwargs。",
+          "render_chat_request 执行模型检查、engine 健康检查和文本/多模态预处理。",
+          "生成 chatcmpl request_id、LoRA、DP rank、token 上限和 SamplingParams。",
+          "调用 engine_client.generate；stream=true 交给 SSE generator，否则等待 full generator。"
+        ]
+      };
+
+      const LOGIC_PHASE_2 = {
+        12: [
+          "把 None 形式的默认 kwargs 和请求 kwargs 视为空 dict。",
+          "以 defaults | request 的方式合并，同名键由请求值覆盖。",
+          "返回新 dict，不修改服务启动时保存的默认配置。"
+        ],
+        13: [
+          "读取服务启动时选定的 reasoning_parser_cls。",
+          "把 renderer tokenizer 与最终 chat template kwargs 注入 parser。",
+          "未配置 parser 时返回 None，后续 reasoning 状态判断被跳过。"
+        ],
+        14: [
+          "调用 _check_model，先确认基础模型或 LoRA 可服务。",
+          "检查 engine_client.errored，防止已死亡引擎进入流式 200 响应。",
+          "全部通过后委托 OpenAIServingRender.render_chat 完成输入预处理。"
+        ],
+        15: [
+          "先匹配 served_model_names 与已注册静态 LoRA。",
+          "运行时 LoRA 更新开启时，尝试通过 registry.resolve_lora 动态加载。",
+          "全部失败则构造 param=model 的 404 NotFoundError。"
+        ],
+        16: [
+          "读取 engine client 的 errored 状态。",
+          "errored=true 时立即取出 dead_error 并抛出。",
+          "该检查发生在响应开始前，保证非流式与流式都得到正确的失败状态。"
+        ],
+        17: [
+          "Mistral tokenizer 先执行 tool call 序列化和 ID 截断。",
+          "校验 tool_choice 是否有可用 tool parser，并把 tools 转成模板需要的 dict。",
+          "非 Harmony 模型检查模板信任后进入 preprocess_chat；GPT-OSS/Harmony 走专用消息构造器。"
+        ],
+        18: [
+          "maybe_serialize_tool_calls 修复 Pydantic 序列化后的 tool call 结构。",
+          "truncate_tool_call_ids 保证 Mistral tool call ID 长度满足约束。",
+          "validate_request_params 检查 Mistral 模板支持的采样与工具参数。"
+        ],
+        19: [
+          "判断是否完全没有 tool parser，且不是 Mistral/Harmony 特例。",
+          "tool_choice=auto 时要求启用 auto tool choice 并配置 parser。",
+          "required 或 named tool choice 时必须存在 parser；否则在请求进入模板前返回 400。"
+        ],
+        20: [
+          "检查 request.chat_template 或 kwargs.chat_template 是否由客户端提供。",
+          "未开启 trust_request_chat_template 时拒绝请求级模板。",
+          "通过后，preprocess_chat 才允许把请求模板用于 conversation 渲染。"
+        ],
+        21: [
+          "合并默认模板 kwargs、tools 和 Mistral tokenize 标志。",
+          "构造 TokenizeParams 与 ChatParams，并叠加媒体/MM processor 默认值。",
+          "调用 renderer.render_chat_async 得到 conversation 和 EngineInput。",
+          "再运行 reasoning/tool parser 的 adjust_request，注入 reasoning 或 grammar 配置。"
+        ],
+        22: [
+          "优先使用 max_completion_tokens，否则使用 max_tokens 作为输出预算。",
+          "把 max_model_len、输出预算、truncate_prompt_tokens、add_special_tokens 写入 TokenizeParams。",
+          "echo 且不返回 token IDs 时开启 detokenization，以便后续恢复原始文本。"
+        ],
+        23: [
+          "请求模板覆盖服务默认模板；content format 由服务默认配置决定。",
+          "add_generation_prompt、continue_final_message、documents、reasoning_effort 合入模板 kwargs。",
+          "请求级 media_io_kwargs 一并写入 ChatParams。"
+        ],
+        24: [
+          "先以服务默认 ChatParams 为基础。",
+          "请求级 chat_template_kwargs 覆盖默认值；media_io_kwargs 使用专用合并函数。",
+          "mm_processor_kwargs 递归合并，保留请求对单个 modality 的覆盖。"
+        ],
+        25: [
+          "并发执行每个 conversation 的 render_messages_async。",
+          "并发 tokenize 所有 dict prompt，并注入 prompt_extras。",
+          "并发 process_for_engine_async，把纯文本、embeds 或 MM 输入转换成 EngineInput。"
+        ]
+      };
+
+      const LOGIC_PHASE_3 = {
+        26: [
+          "根据 tokens 和给定 content format 自动判断模板应接收字符串还是 OpenAI parts。",
+          "异步解析每条消息中的文本、媒体和 tool 信息，得到 conversation 与 MM 数据。",
+          "通过 chat template 生成原始 prompt，再标准化为 TextPrompt/TokensPrompt。",
+          "把 multi_modal_data 与 multi_modal_uuids 附加到 prompt，供 tokenization 和 processor 使用。"
+        ],
+        27: [
+          "创建 AsyncMultiModalItemTracker，维护各 modality 的异步结果和顺序。",
+          "逐条调用 _parse_chat_message_content 处理 role、content、tool_calls 和 reasoning。",
+          "_postprocess_messages 把 assistant tool_call arguments 从 JSON 字符串规范化为对象。",
+          "await tracker.resolve_items，得到最终 mm_data、mm_uuids 和 conversation。"
+        ],
+        28: [
+          "遍历 content parts，按 type 查找文本、图片、音频、视频或 embeds 解析器。",
+          "文本保留为字符串或 OpenAI text part；媒体交给 MM parser 并记录 modality。",
+          "openai 格式保留结构化 dict parts；string 格式把媒体替换为模型占位符。",
+          "最终按 message 聚合 content，并保留 assistant/tool 专属字段。"
+        ],
+        29: [
+          "根据 image_url、image_embeds、audio_url、input_audio、video_url 等选择 parse_* 方法。",
+          "URL 类型创建异步 fetch coroutine；embeds 类型创建立即完成的 Future。",
+          "tracker.add 校验该 modality 的允许数量，并返回模型专用占位符字符串。",
+          "把占位符和原始 item 写入 tracker 的 modality 队列与顺序信息。"
+        ],
+        30: [
+          "MediaConnector 根据允许的本地路径、允许域名和 media_io_kwargs 加载媒体。",
+          "图片解码为 PIL Image；音频/视频解码为对应 media 对象。",
+          "fetch coroutine 作为 tracker item 保存，待 resolve_items 阶段统一 gather。",
+          "媒体加载失败会作为请求异常向上抛出，不进入模型执行。"
+        ],
+        31: [
+          "无媒体时直接返回 (None, None)，避免额外 gather。",
+          "按 modality 对 awaitable 列表执行 asyncio.gather。",
+          "禁止 raw image/audio 与对应 embeds 混用。",
+          "把结果整理成有序 MultiModalDataDict 与 UUID 列表，供 processor 使用。"
+        ],
+        32: [
+          "HfRenderer 初始化时用 make_async 把 safe_apply_chat_template 包装到共享线程池。",
+          "请求处理阶段通过 await 执行该 future，避免 Jinja/HF 模板阻塞事件循环。",
+          "线程池返回字符串或 token ids，再回到 render_messages_async。"
+        ],
+        33: [
+          "先调用 resolve_chat_template 选择请求、服务、模型或内置模板。",
+          "resolve_chat_template_kwargs 过滤函数签名、Jinja 变量和 HF 标准参数之外的 kwargs。",
+          "执行 tokenizer.apply_chat_template；Jinja/HF 异常统一包装为 ValueError。"
+        ],
+        34: [
+          "模板选择优先级包含请求覆盖、服务默认、tokenizer/model 配置与内置 registry。",
+          "Jinja sandbox 解析模板未声明变量，避免传入模板不认识的 kwargs。",
+          "函数签名与 HF 基类参数共同决定 accepted vars；chat_template 本身不再重复传入 kwargs。"
+        ],
+        35: [
+          "HF tokenizer 使用 conversation、tools、最终模板和 resolved kwargs 渲染。",
+          "tokenize=false 通常返回 prompt 字符串；Mistral tokenizer 可能直接返回 token ids。",
+          "渲染发生在线程池中，失败时异常会回到 render_messages_async。"
+        ],
+        36: [
+          "字符串 prompt 转 TextPrompt，整数 token list 转 TokensPrompt。",
+          "带 prompt/prompt_token_ids/prompt_embeds 的 dict 原样保留。",
+          "非法类型或 decoder-only 模型收到 encoder_prompt 时抛 TypeError。"
+        ],
+        37: [
+          "接收一个或多个 dict prompt 和同一个 TokenizeParams。",
+          "使用 asyncio.gather 并发执行 tokenize_prompt_async。",
+          "保持输入顺序返回 tokenized prompts；chat 通常只有一个 prompt。"
+        ],
+        38: [
+          "根据 encode kwargs 生成 queue key，把请求放入对应 asyncio queue。",
+          "后台 microbatch loop 等待最多约 2ms 或积累到 32 条请求。",
+          "底层 tokenizer 调用放入 executor；完成后通过 Future 返回 input_ids。"
+        ],
+        39: [
+          "从队列取出首条请求，并在 deadline 内继续收集同 key 请求。",
+          "达到 batch 上限或超时后，在单线程 executor 执行 batch encode。",
+          "每个调用者从自己的 Future 取回结果；异常分别传播。"
+        ],
+        40: [
+          "tokenization 前检查字符长度上界并执行可选 lowercase。",
+          "tokenization 后按配置执行 padding、左侧/右侧截断。",
+          "最终检查 token 数是否超过 max_total_tokens - max_output_tokens，超限抛 VLLMValidationError。"
+        ],
+        41: [
+          "根据 encoder-decoder 或 decoder-only 选择实际 target prompt。",
+          "把 cache_salt 与 mm_processor_kwargs 等 prompt_extras 合并进 prompt dict。",
+          "extras 不进入 chat template，而是作为后续 InputProcessor/MM processor 参数。"
+        ],
+        42: [
+          "有 encoder_prompt 时走 _process_enc_dec_async；否则走 _process_singleton_async。",
+          "singleton 根据 prompt_embeds 或 token ids 选择 embeddings/tokens 处理。",
+          "多模态 token prompt 进入 MM processor；最终结果统一写入 arrival_time。"
+        ],
+        43: [
+          "make_async 把 _process_multimodal 包装为 MM executor 上的异步调用。",
+          "skip_mm_cache 为真且存在 readonly processor 时，使用独立 processor-only cache。",
+          "processor.apply 完成后通过 future 返回 MultiModalInput，避免阻塞 ASGI loop。"
+        ],
+        44: [
+          "创建 renderer 内部 mm request id，用于 timing 与 cache 统计。",
+          "parse_mm_data 与 parse_mm_uuids 把输入规范化为 modality item 列表。",
+          "校验 raw/embeds 数量与 UUID 对齐，构造 MMProcessorInputs。",
+          "调用 mm_processor.apply，得到 mm_kwargs、placeholders 和 hashes。"
+        ],
+        45: [
+          "构造 type=tokens 的 TokensInput。",
+          "把 prompt 文本和 cache_salt 附加到 EngineInput。",
+          "纯文本路径不创建 mm_features，也不进入 MM processor。"
+        ],
+        46: [
+          "把 request、tokenizer/model 配置交给 reasoning parser。",
+          "parser 可补充 reasoning 相关 stop token、prompt 状态或结构化输出参数。",
+          "默认抽象实现仅返回原 request；模型专属 parser 可原地修改。"
+        ],
+        47: [
+          "tool parser 根据 request.tools、tool_choice 和 parallel_tool_calls 生成 grammar。",
+          "Mistral 使用 mistral-common grammar factory 生成 Lark grammar。",
+          "structured_outputs 与 _grammar_from_tool_parser 写回 request，影响后续 SamplingParams。"
+        ]
+      };
+
+      const LOGIC_PHASE_4 = {
+        48: [
+          "优先读取 raw_request.headers[X-Request-Id]。",
+          "无请求头时使用 Pydantic 生成的 request.request_id。",
+          "上层再加 chatcmpl- 前缀，并把该 ID 写入 RequestResponseMetadata。"
+        ],
+        49: [
+          "如果 request.model 命中静态 LoRA 名，直接返回对应 LoRARequest。",
+          "否则扫描消息 content type，寻找与 modality 同名的默认 MM LoRA。",
+          "基础模型返回 None；恰好一个默认 MM LoRA 时才自动启用。"
+        ],
+        50: [
+          "读取 X-data-parallel-rank header。",
+          "解析为整数；缺失或解析失败返回 None。",
+          "真正的 rank 范围校验延后到 InputProcessor。"
+        ],
+        51: [
+          "先确保 input_length 不超过 max_model_len。",
+          "候选上限包括模型剩余长度、请求/默认 max_tokens、override 和平台上限。",
+          "忽略 None 后取最小值，作为最终生成上限。"
+        ],
+        52: [
+          "补齐 temperature、top_p、top_k、min_p 和 penalties 的模型默认值。",
+          "把 response_format 转换为 structured_outputs；echo 时可要求 prompt logprobs。",
+          "stream 决定 RequestOutputKind.DELTA 或 FINAL_ONLY。",
+          "kv_transfer_params 写入 extra_args，供 disaggregated serving 使用。"
+        ],
+        53: [
+          "过滤未设置的 optional 字段，避免覆盖引擎默认行为。",
+          "写入 n、stop、logprobs、penalties、structured outputs、bad words 和 repetition detection。",
+          "skip_clone=True，因为该对象由当前请求新建、不会共享给其他请求。"
+        ],
+        54: [
+          "没有 RequestLogger 时直接返回，避免无谓的 prompt 提取。",
+          "提取 prompt text、token_ids、embeds。",
+          "连同 SamplingParams 和 LoRARequest 写入 request logger。"
+        ],
+        55: [
+          "询问 engine_client 是否开启 tracing。",
+          "开启时从 HTTP headers 提取 trace context。",
+          "未开启但请求带 trace header 时记录一次 warning；否则返回 None。"
+        ],
+        56: [
+          "读取 prompt_token_ids 与 parser 的 reasoning end token。",
+          "检查 reasoning end token 是否已在 prompt 中出现。",
+          "结果作为 engine generate 的 reasoning_ended 初值，影响首个输出 chunk。"
+        ],
+        57: [
+          "接口返回 AsyncGenerator，不立即执行模型。",
+          "将 EngineInput、SamplingParams、request_id、LoRA、trace、priority 和 DP rank 交给具体 EngineClient。",
+          "只有 stream/full generator 开始迭代时，才真正推进 add_request 与引擎执行。"
+        ],
+        58: [
+          "request.stream=true 时返回 SSE async generator。",
+          "request.stream=false 时 await full generator，得到完整 ChatCompletionResponse。",
+          "beam search 是独立路径：OpenAIServing.beam_search 反复对每个 beam 调用 engine generate。"
+        ]
+      };
+
+      const LOGIC_PHASE_5 = {
+        59: [
+          "首次迭代会 await add_request，创建本地 collector 并向 EngineCore 提交请求。",
+          "循环优先 get_nowait，否则 await collector.get，以尽量减少事件循环切换。",
+          "finished=true 后退出；CancelledError/GeneratorExit 触发 abort；未知异常包装为 EngineGenerateError。",
+          "finally 中关闭 collector，停止 streaming input 子任务。"
+        ],
+        60: [
+          "先检查 engine errored 状态，并拒绝 kv-sharing fast prefill 与 prompt_logprobs 的不兼容组合。",
+          "普通 EngineInput 经 InputProcessor 转为 EngineCoreRequest；已有 EngineCoreRequest 只做兼容处理。",
+          "assign_request_id 区分 external/internal ID，创建 RequestOutputCollector。",
+          "n=1 直接提交；n>1 创建 ParentRequest 并逐个提交 child request。"
+        ],
+        61: [
+          "检查 supported task 和 SamplingParams/PoolingParams 合法性。",
+          "检查 LoRA 与 DP rank 范围，校验 prompt 长度、token id 范围和 MM embed 预算。",
+          "clone 采样参数，应用 generation config 与 tokenizer 默认 EOS/stop。",
+          "把 MM placeholder/hash/data 排序并转成 MultiModalFeatureSpec，构造 EngineCoreRequest。"
+        ],
+        62: [
+          "generation 任务必须出现在 supported_tasks 中。",
+          "SamplingParams.verify 检查 temperature、logprobs、structured output、spec decode 等组合。",
+          "thinking_token_budget 要求 reasoning_config 已启用；LoRA 请求要求 lora_config 存在。"
+        ],
+        63: [
+          "把 processed EngineInput 和 params 交给 current_platform。",
+          "平台可针对硬件、dtype、attention backend 或特殊输入追加限制。",
+          "不通过时在请求进入 EngineCore 前抛出错误。"
+        ],
+        64: [
+          "split_enc_dec_input 区分 encoder/decoder prompt。",
+          "_validate_prompt_len 检查 decoder 非空、长度小于 max_model_len，并保留至少一个输出 token 空间。",
+          "检查 token id 不超过 tokenizer vocab，MM placeholder token 数不超过 encoder cache。"
+        ],
+        65: [
+          "clone 防止请求对象与 engine 内部状态互相污染。",
+          "max_tokens 未设置时按 max_model_len - prompt_len 补齐。",
+          "update_from_generation_config 应用模型 generation_config。",
+          "update_from_tokenizer 合并 tokenizer 的 EOS/stop 默认值。"
+        ],
+        66: [
+          "验证 mm_hashes 所有叶节点都是字符串。",
+          "argsort_mm_positions 按 prompt 中的 placeholder offset 排序。",
+          "每个 item 构造 MultiModalFeatureSpec，记录 modality、identifier、position 和 hash。",
+          "启用 tower/connector LoRA 时，把 LoRA name 混入 MM identifier，避免错误缓存复用。"
+        ],
+        67: [
+          "保存 decoder prompt_token_ids 或 prompt_embeds。",
+          "保存 sampling_params 或 pooling_params、arrival_time、LoRA、cache_salt、priority 和 DP rank。",
+          "保存排序后的 mm_features 与 trace headers，供 EngineCore 调度和 worker encode 使用。"
+        ],
+        68: [
+          "external_req_id 保留客户端可见 ID。",
+          "默认把内部 request_id 改为 external-id + 8 位随机后缀。",
+          "关闭随机化时仍保留兼容路径，但打印重复 ID 风险 warning。"
+        ],
+        69: [
+          "保存 output_kind，DELTA 模式开启 aggregate。",
+          "首次 put 设置 ready Event；后续 DELTA 输出可合并。",
+          "异常对象优先于普通输出，使 generate consumer 立即抛错。"
+        ],
+        70: [
+          "ParentRequest 保存父请求、共享 collector 和所有 child request id。",
+          "每个 child 获得独立 request id 与 child SamplingParams。",
+          "child 完成后把 output 写回 parent；所有 child 完成才把 parent output 标记 finished。"
+        ],
+        71: [
+          "先查同内部 request id 是否已存在，存在则作为 streaming update 处理。",
+          "否则创建 RequestState，并登记 request_states。",
+          "parent request 存在时登记 parent_requests。",
+          "更新 external_req_id → internal request ids 映射，便于按外部 ID abort。"
+        ],
+        72: [
+          "从 SamplingParams 取 output_kind、max_tokens、n、temperature、top_p。",
+          "detokenize=false 时丢弃 tokenizer，跳过文本解码。",
+          "创建 LogprobsProcessor 与 IncrementalDetokenizer。",
+          "初始化 stats、stream interval、cached token 计数与 streaming input 状态。"
+        ],
+        73: [
+          "无 tokenizer 时返回 no-op IncrementalDetokenizer。",
+          "新版 fast tokenizer 使用 tokenizers.DecodeStream 做 native prefill。",
+          "其它 tokenizer 使用 Python 增量 detokenization。",
+          "初始化 stop string 列表、min_tokens 和 stop buffer 长度。"
+        ],
+        74: [
+          "先在 API 进程 OutputProcessor 注册请求，确保输出回来时已有 RequestState。",
+          "再向 EngineCore 发送 ADD 消息。",
+          "两者顺序保证输出不会先于本地状态创建而丢失。",
+          "log_requests 开启时记录 Added request。"
+        ],
+        75: [
+          "msgpack 编码 request type 和请求 payload。",
+          "把 EngineIdentity、消息帧和可选 tensor buffer 通过 ZMQ multipart 发送。",
+          "有 auxiliary buffer 时跟踪 send tracker，直到 ZMQ 完成才释放对象。",
+          "ADD 后启动/确保 output queue task，防止丢输出。"
+        ],
+        76: [
+          "从 input socket 接收并解码 request type。",
+          "ADD 先经过 preprocess_add_request，再调用 EngineCore.add_request。",
+          "ABORT 放入 aborts_queue，在下一次 step 边界处理。",
+          "UTILITY 请求走 engine collective/utility 方法并回写 utility output。"
+        ],
+        77: [
+          "mm_receiver_cache 存在且请求含 mm_features 时，先刷新接收端多模态特征。",
+          "Request.from_engine_core_request 建立调度器状态和 block hashes。",
+          "structured output 请求调用 grammar_init。",
+          "返回 Request 与 request_wave，交给 Scheduler.add_request。"
+        ],
+        78: [
+          "从已哈希 block 数乘 block_size 得到下一未哈希区间。",
+          "仅处理完整 block；最后一个不满 block 留到后续 token 追加后。",
+          "extra keys 包含 LoRA、多模态 identifier/位置、首块 cache_salt、prompt embeds hash。",
+          "用父 hash + 当前 token tuple + extra keys 生成链式 block hash。"
+        ],
+        79: [
+          "只对 use_structured_output=true 的请求初始化 grammar。",
+          "提交 JSON schema、regex、choice 或 grammar 编译任务。",
+          "编译完成前请求处于 WAITING_FOR_STRUCTURED_OUTPUT_GRAMMAR。",
+          "scheduler.schedule 会跳过未 ready 请求，避免用缺失 bitmask 采样。"
+        ],
+        80: [
+          "同 internal request id 存在时，作为 streaming session update 或 duplicate 处理。",
+          "resumable 请求初始化 streaming_queue。",
+          "新请求按 blocked/paused 状态进入 skipped_waiting 或 waiting。",
+          "写入 requests map，并可选记录 QUEUED 事件。"
+        ]
+      };
+
+      const LOGIC_PHASE_6 = {
+        81: [
+          "scheduler 无请求时直接返回空 outputs 和 model_executed=false。",
+          "有请求时先 schedule，得到本步 token/block/encoder 计划。",
+          "启动非阻塞 execute_model，同时计算 grammar bitmask。",
+          "等待 forward；需要时调用 sample_tokens；最后 update_from_output。"
+        ],
+        82: [
+          "先遍历 running，计算每请求仍缺多少 token，并按 token budget 截断。",
+          "调用 allocate_slots；失败时按策略抢占并回收 KV/encoder cache。",
+          "再遍历 waiting，查询 prefix/connector 命中并分配 slots。",
+          "生成 SchedulerOutput 后调用 _update_after_schedule 推进 computed token 数。"
+        ],
+        83: [
+          "未启用 prefix caching 或请求标记 skip_reading_prefix_cache 时返回空命中。",
+          "最大命中长度限制为 num_tokens - 1，确保至少重算一个 token 以产生 logits。",
+          "调用 coordinator.find_longest_cache_hit 获取命中 blocks。",
+          "记录 PrefixCacheStats，并返回 KVCacheBlocks + token 数。"
+        ],
+        84: [
+          "沿 request.block_hashes 顺序查询每个完整 block。",
+          "任一 KV group miss 即停止当前命中链。",
+          "命中长度受 max_cache_hit_length 和 block 对齐约束。",
+          "返回每 group 相同的命中 block 列表与 token 数。"
+        ],
+        85: [
+          "block hash 先与 kv_cache_group_id 组合成最终 key。",
+          "在每个需要参与缓存的 group 中查找 block。",
+          "任一 group 没有 cached block 就整体 miss。",
+          "全部命中时返回各 group 对应的 KVCacheBlock。"
+        ],
+        86: [
+          "本地 prefix 命中后，将 request 与 local hit 数交给外部 connector。",
+          "connector 返回额外可命中 token 数和是否异步加载。",
+          "None 表示 connector 暂时无法判断，应把请求放回 skipped queue。",
+          "记录 connector prefix query/hit 统计。"
+        ],
+        87: [
+          "按 comp/new_comp/ext_comp/new/lookahead 五段计算 slot 需求。",
+          "先移除滑动窗口外不再需要的 blocks。",
+          "free pool 不足时返回 None，由 scheduler 触发抢占或等待。",
+          "足够时增加命中 block 引用、分配新 blocks，并提交可缓存的 full blocks。"
+        ],
+        88: [
+          "对每个 single-type KV manager 分别计算 block 需求。",
+          "cross-attention group 使用 encoder token 数，而不是 decoder token 数。",
+          "命中 computed blocks 先增加 ref count，再处理新 blocks。",
+          "按 group 返回新分配的 block 列表。"
+        ],
+        89: [
+          "从 free_block_queue 头部按 LRU 顺序取出 blocks。",
+          "缓存开启时先清理该 block 的旧 hash 映射。",
+          "ref_cnt 从 0 增至 1，并记录 allocation metric。",
+          "返回分配后的 KVCacheBlock 列表。"
+        ],
+        90: [
+          "逐 KV group 调用 SingleTypeKVCacheManager.cache_blocks。",
+          "只缓存完整且可提交的 token blocks。",
+          "null/sliding-window 跳过 block 不进入 hash cache。",
+          "更新 block_hash 元数据和 hash→block 映射，可选发布 BlockStored 事件。"
+        ],
+        91: [
+          "释放 request 的 KV blocks 和 encoder cache。",
+          "状态改为 PREEMPTED，num_computed_tokens 归零，spec tokens 清空。",
+          "num_preemptions 加一，并 prepend 到 waiting，优先重新调度。",
+          "记录 PREEMPTED 事件供性能分析。"
+        ],
+        92: [
+          "NewRequestData 保存新请求 prompt、params、block ids 和 MM features。",
+          "CachedRequestData 只发送已存在请求的本步增量 token 与 block 更新。",
+          "SchedulerOutput 汇总 scheduled tokens、spec tokens、encoder inputs 和 common prefix blocks。",
+          "附带 preempted/finished ids、KV connector metadata 和 block zeroing 信息。"
+        ],
+        93: [
+          "遍历 num_scheduled_tokens，把 request.num_computed_tokens 增加本步调度数。",
+          "据此设置 is_prefill_chunk，并判断 structured output 是否进入可采样阶段。",
+          "清除 scheduler.finished_req_ids 的内部引用。",
+          "SchedulerOutput 保留本步旧值，供 worker 准确定位输入 token。"
+        ],
+        94: [
+          "MultiprocExecutor.execute_model 把 RPC 方法设为 execute_model。",
+          "broadcast SchedulerOutput 到所有 worker，并只等待 output rank 的 ModelRunnerOutput。",
+          "non_block=true 返回 Future，让 EngineCore 可先获取 grammar bitmask。",
+          "有 KV connector 时通过 aggregator 合并 worker KV 输出。"
+        ],
+        95: [
+          "无 structured output 请求时直接返回 None。",
+          "筛选已过 prefill chunk、真正需要 grammar 的 request ids。",
+          "调用 structured_output_manager.grammar_bitmask。",
+          "返回 request ids 与 bitmask 组成的 GrammarOutput。"
+        ],
+        96: [
+          "调用 future.result 等待 executor/worker 的 forward 结果。",
+          "普通 forward 可能返回 None，并把 logits 暂存在 model runner。",
+          "None 时 EngineCore 调用 model_executor.sample_tokens(grammar_output)。",
+          "若直接返回 ModelRunnerOutput，则跳过独立采样调用并继续 update。"
+        ]
+      };
+
+      const LOGIC_PHASE_7 = {
+        97: [
+          "MultiprocExecutor 把方法和参数放入 RPC broadcast queue。",
+          "每个 worker 从自己的 queue 执行方法，并写回 WorkerProc response queue。",
+          "executor 按 output_rank 只收集主输出 worker 的 ModelRunnerOutput。",
+          "non_block=true 时包装为 Future；非阻塞路径仍需及时暴露已完成 future 的异常。"
+        ],
+        98: [
+          "等待上一轮 pipeline parallel send 完成，避免覆盖通信 buffer。",
+          "非首 PP rank 先异步接收 intermediate tensors。",
+          "调用 model_runner.execute_model，传入 SchedulerOutput 与中间张量。",
+          "首 rank 启动模型激活；PP 非末 rank 只发送 intermediate tensors。"
+        ],
+        99: [
+          "先重置/清理 routed experts buffer，并复制会被修改的 scheduler token 映射。",
+          "调用 _update_states 同步请求增删与 KV block 状态。",
+          "准备 input ids、positions、slot mappings 和 attention metadata。",
+          "执行 MM encoder、输入 embedding、模型 forward 和 lm_head，暂存 logits 等待采样。"
+        ],
+        100: [
+          "移除 finished/preempted 请求，从持久 input batch 和 block table 释放状态。",
+          "新请求插入 request state，并初始化 token ids、prompt embeds、LoRA 和 MM features。",
+          "已有请求更新 num_computed_tokens、block table 与 speculative token 状态。",
+          "可能返回延迟修正函数，在 forward 启动后修补 batch 状态。"
+        ],
+        101: [
+          "根据每请求 scheduled token 数展开 request indices。",
+          "计算 query positions、sequence positions 和 token indices，写入预分配 CPU/GPU buffer。",
+          "生成 M-RoPE/XD-RoPE、block-table slot mappings 和 logits indices。",
+          "为 chunked prefill 设置 discard mask；spec decode 时生成 SpecDecodeMetadata。"
+        ],
+        102: [
+          "commit_block_table 把 scheduler 传入的 block ids 更新到 worker block table。",
+          "对每个 scheduled token 计算它所在 block 与 block 内 offset。",
+          "slot = block_id * block_size + offset。",
+          "slot mapping 被 attention backend 用于写入/读取对应 KV cache 位置。"
+        ],
+        103: [
+          "按每个 KV cache group/attention backend 组装 metadata。",
+          "填充 seq_lens、query_lens、block tables、slot mappings 和 logits indices。",
+          "处理 chunked prefill、cascade attention 和 speculative decode 的额外元数据。",
+          "返回通用 metadata 与 per-layer metadata，供 set_forward_context 使用。"
+        ],
+        104: [
+          "多模态模型先执行 MM encoder 与 embedding gather。",
+          "model.embed_input_ids 把文本 token 和 MM embeddings 合成统一 inputs_embeds。",
+          "prompt embeds 路径只替换 token-id 位置；纯文本模型保留 input_ids。",
+          "最后合并 model kwargs 与 EC connector output。"
+        ],
+        105: [
+          "根据 scheduler_output.scheduled_encoder_inputs 收集 mm data、hash 和 LoRA 引用。",
+          "按 modality 分批，视频等特殊 modality 可逐 item 执行。",
+          "优先使用 encoder CUDA graph，否则调用 model.embed_multimodal。",
+          "输出经过 sanity check 后写入 encoder_cache，并可保存到 EC connector。"
+        ],
+        106: [
+          "把多模态 kwargs 搬到正确 device，并按 modality batch。",
+          "执行 encoder CUDA graph 或 eager multimodal encoder。",
+          "返回每 item embedding；动态 feature size 时返回 tensor list。",
+          "调用方用 mm_hash 缓存，避免相同媒体在后继请求重复 encode。"
+        ],
+        107: [
+          "根据 placeholder 与本步 num_computed_tokens/scheduled tokens 判断是否 overlap。",
+          "从 encoder_cache 按 placeholder range 切片 embedding。",
+          "生成 is_mm_embed mask，标记哪些 decoder token 位置要使用 soft embedding。",
+          "M-RoPE/XD-RoPE 需要时同步位置张量。"
+        ],
+        108: [
+          "对 scheduled input ids 执行 model.embed_input_ids。",
+          "mm_embeds 与 is_mm_embed mask 指定要替换的位置。",
+          "结果写入持久 inputs_embeds buffer。",
+          "后续 decoder 只接收 inputs_embeds，不区分文本与媒体 token。"
+        ],
+        109: [
+          "该方法是 runner 对底层模型 forward 的统一薄包装。",
+          "转发 input_ids、positions、intermediate_tensors、inputs_embeds 和 model kwargs。",
+          "保留单独调用点便于测试、profiling 和子类覆盖。"
+        ],
+        110: [
+          "进入模型自身的 transformer layers。",
+          "attention backend 使用当前 forward context 中的 KV slot mapping 和 metadata。",
+          "每层执行 attention、MLP、norm 与残差，并更新 KV cache。",
+          "末层返回 hidden states；PP 中间 rank 返回 IntermediateTensors。"
+        ],
+        111: [
+          "只选择 logits_indices 对应的 hidden states，而非整个 batch。",
+          "通过 lm_head 计算 vocabulary logits。",
+          "PP broadcast 模式下，将 logits 从末 rank 广播到需要采样的 rank。",
+          "logits 暂存在 runner 状态中，等待 sample_tokens。"
+        ],
+        112: [
+          "把 scheduler_output、logits、hidden states、spec metadata、slot mappings 等打包进 ExecuteModelState。",
+          "返回 None 表示 forward 已启动但采样尚未完成。",
+          "暂存状态让 grammar bitmask 与模型 forward 可部分并行。",
+          "sample_tokens 随后读取并清空该状态。"
+        ]
+      };
+
+      const LOGIC_PHASE_8 = {
+        113: [
+          "EngineCore 在 forward future 返回 None 时调用 executor.sample_tokens。",
+          "grammar_output 可能为 None；有 structured output 时携带本步 bitmask。",
+          "sample_tokens 仍需 worker 执行，因此通过 executor RPC/future 返回。",
+          "采样完成后 EngineCore 才把 ModelRunnerOutput 交给 scheduler。"
+        ],
+        114: [
+          "Worker.sample_tokens 是 worker 侧薄包装。",
+          "参数只包含 GrammarOutput 或 None。",
+          "实际状态保存在 GPUModelRunner.execute_model_state。",
+          "Worker 直接调用 model_runner.sample_tokens。"
+        ],
+        115: [
+          "取出并清空 execute_model_state。",
+          "有 grammar_output 时先应用 bitmask，再执行 _sample。",
+          "采样 token 写回 input batch，并处理 discard mask。",
+          "spec decode 时继续提出下一轮 draft tokens，最后构造 ModelRunnerOutput。"
+        ],
+        116: [
+          "根据 request id 找到对应 structured output grammar。",
+          "把允许 token mask 转成 logits 上的 -inf 屏蔽。",
+          "处理 padded vocab/tensor 形式，避免非法 token 被采样。",
+          "原地修改 logits，后续 Sampler 不再感知 grammar 细节。"
+        ],
+        117: [
+          "普通 decode 使用 Sampler.forward。",
+          "spec decode 使用 RejectionSampler，按 draft distribution 接受或拒绝 token。",
+          "异步 scheduling 时先补入上一轮真实 draft token ids。",
+          "返回 SamplerOutput，包含 sampled token ids 与 logprob tensors。"
+        ],
+        118: [
+          "若请求 logprobs，先按配置保存 raw logits 或 raw logprobs。",
+          "logits 转 float32，应用 allowed ids、bad words、处理器和 penalties。",
+          "调用 sample 生成 token，再收集 top logprobs 与 sampled token logprob。",
+          "输出 int32 token ids，减少后续张量/IPC 开销。"
+        ],
+        119: [
+          "全 greedy 请求直接 argmax。",
+          "混合请求先计算 greedy 结果，再对随机请求应用 temperature。",
+          "执行 min_p 等 argmax-invariant processors，并调用 TopKTopPSampler。",
+          "temperature 低于 epsilon 的位置改回 greedy 结果。"
+        ],
+        120: [
+          "根据 backend/参数选择 Triton 或 FlashInfer 等采样实现。",
+          "对 logits 应用 per-request top-k 与 top-p 截断。",
+          "使用每个请求的 RNG state 进行随机采样。",
+          "返回 sampled token ids 与可选 processed logprobs。"
+        ],
+        121: [
+          "sampled token ids 扩展为 [num_requests, 1]。",
+          "logprob tensors 保持 GPU 形式，避免立即同步。",
+          "SamplerOutput 作为 sample_tokens 的中间结果。",
+          "后续 bookkeeping 才把它整理成请求级 CPU/list 输出。"
+        ],
+        122: [
+          "计算 NaN logits 统计（按环境开关）。",
+          "根据 discard_request_mask 清除 chunked-prefill 不应消费的采样结果。",
+          "同步/异步模式分别决定 token list 复制和 GPU token 暂存方式。",
+          "更新 input batch 的 token ids，并返回 request ids、logprobs、prompt logprobs 等。"
+        ],
+        123: [
+          "记录本批 request ids 与 id→index 映射。",
+          "携带 sampled_token_ids、logprobs、prompt_logprobs、pooler_output。",
+          "携带 KV connector output、CUDA graph/execute metadata。",
+          "executor 聚合 output rank 结果后交给 EngineCore scheduler。"
+        ],
+        124: [
+          "遍历本步 scheduled request，读取 sampled token ids。",
+          "spec decode 时根据 accepted token 数调整 num_computed_tokens 和 output placeholders。",
+          "调用 _update_request_with_output append token 并检查 stop。",
+          "完成请求释放 KV/encoder cache、收集 logprobs/prefill stats，并构造 EngineCoreOutput。"
+        ],
+        125: [
+          "按 sampled token 顺序逐个 append 到 Request。",
+          "每 append 一个 token 就调用 check_stop。",
+          "命中 stop 时删除后续 speculative/new tokens。",
+          "返回被保留的新 token ids 与 stopped 标志。"
+        ],
+        126: [
+          "min_tokens 未满足前忽略 stop。",
+          "检查 EOS 与 stop_token_ids。",
+          "检查 max_model_len 与 max_tokens 长度上限。",
+          "启用 repetition_detection 时检查重复 N-gram，并设置 FINISHED_REPETITION。"
+        ],
+        127: [
+          "仅在本步有新 token、pooling 输出、KV transfer 参数或 stopped 时创建输出。",
+          "写入 new_token_ids、finish_reason、stop_reason。",
+          "附加 logprobs、prefill_stats、KV transfer params、trace headers 和 routed experts。",
+          "按 client_index 聚合，最终封装为 EngineCoreOutputs。"
+        ],
+        128: [
+          "EngineCore 把每个 client 的 EngineCoreOutput 列表放入 EngineCoreOutputs。",
+          "同一消息可附带 scheduler stats 与 finished request id 集合。",
+          "通过 ZMQ output socket 发回 AsyncMPClient。",
+          "API 进程 output task 解码后放入 outputs_queue，供 AsyncLLM output handler 消费。"
+        ]
+      };
+
+      const LOGIC_PHASE_9 = {
+        129: [
+          "独立 asyncio task 持续 await output_socket.recv_multipart。",
+          "msgpack 解码为 EngineCoreOutputs，并先处理 utility/notification 消息。",
+          "业务 outputs 或 scheduler stats 通过 queue.put_nowait 交给 AsyncLLM。",
+          "socket 异常或 task 取消会放入 EngineDeadError，终止所有生成。"
+        ],
+        130: [
+          "await engine_core.get_output_async 获取一批 EngineCoreOutputs。",
+          "按 VLLM_V1_OUTPUT_PROC_CHUNK_SIZE 分块，避免长时间占用事件循环。",
+          "每块调用 OutputProcessor.process_outputs，把 RequestOutput 放入请求 collector。",
+          "对 stop-string 触发的 reqs_to_abort 向 EngineCore 发送 abort，并更新 stats。"
+        ],
+        131: [
+          "用 internal request_id 查找 RequestState；找不到通常表示已 abort。",
+          "更新 iteration stats，并从首个 prefill 输出记录 num_cached_tokens。",
+          "detokenizer.update 增量解码并检查 stop string；logprobs_processor 更新 logprobs。",
+          "make_request_output 生成输出并放入 collector；完成请求则释放状态。"
+        ],
+        132: [
+          "若 finish_reason 来自 stop token 且不包含 stop string，则跳过最后 stop token 解码。",
+          "逐 token 解码并累计 output_text 与 token_ids。",
+          "min_tokens 未满足前不检查 stop strings。",
+          "命中 stop string 后按 include_stop_str_in_output 截断文本。"
+        ],
+        133: [
+          "读取 EngineCoreOutput 中 slice 后的 sampled logprobs。",
+          "按 token 位置合并 top-k logprobs 与实际 sampled token。",
+          "维护 cumulative_logprob。",
+          "DELTA 模式首次输出后清空 prompt logprobs，避免重复发送。"
+        ],
+        134: [
+          "FINAL_ONLY 且未 finished 时返回 None，丢弃中间态。",
+          "DELTA 模式只选择新增 token 与文本。",
+          "构造 CompletionOutput，写入 finish_reason、stop_reason 和 logprobs。",
+          "n>1 时交给 ParentRequest 聚合 child outputs；最后构造 RequestOutput。"
+        ],
+        135: [
+          "collector 尚无输出时直接放入并触发 ready Event。",
+          "已有 RequestOutput 且为 DELTA 时调用 add 聚合文本/token/logprobs。",
+          "FINAL_ONLY 时用最新完整输出替换旧快照。",
+          "Exception 直接放入，consumer get 时抛给 generate。"
+        ],
+        136: [
+          "每轮先 get_nowait，减少高负载下的 task switching。",
+          "无立即可用输出时 await q.get。",
+          "读取 finished 标志，finished=true 时退出循环。",
+          "STREAM_FINISHED sentinel 不传给 chat 生成器。"
+        ],
+        137: [
+          "将 RequestOutput 作为 async generator 的 yield 值交给上层。",
+          "输出可以是 DELTA 增量，也可以是 full generator 需要的最终快照。",
+          "上层结束时执行 finally 关闭 collector。",
+          "断连/取消时进入 abort 分支，而不是正常结束。"
+        ],
+        138: [
+          "初始化 choice 数、finish 标记、previous text/token ids 和 parser。",
+          "根据 stream_options 计算 include_usage/continuous usage。",
+          "async for 遍历 RequestOutput，处理 role 首包、正文 delta、tool/reasoning 和 finish。",
+          "最终按需发 usage chunk 与 [DONE]。"
+        ],
+        139: [
+          "第一个 RequestOutput 到达时记录 prompt token 数与 cached token 数。",
+          "为每个 choice 构造 role-only delta chunk。",
+          "若 echo=true，追加最后一条同 role 消息内容。",
+          "return_token_ids 开启时，首包带 prompt_token_ids。"
+        ],
+        140: [
+          "Harmony 按 channel/recipient/token state 拆分 reasoning、commentary、final 与 tool。",
+          "Mistral grammar 路径把 reasoning 和 tool 解析合并处理。",
+          "普通 parser 使用 partial JSON 解析 delta；未完整时返回 None 并跳过。",
+          "返回 DeltaMessage，更新 previous_text 与 previous_token_ids。"
+        ],
+        141: [
+          "把 choice/delta/logprobs/usage 放入 ChatCompletionStreamResponse。",
+          "model_dump_json(exclude_unset=True) 生成 OpenAI chunk JSON。",
+          "continuous_usage_stats 开启时附加累计 usage。",
+          "最终字符串按 SSE data 格式发送。"
+        ],
+        142: [
+          "每个 chunk 先转成 JSON 字符串。",
+          "以 data: <json>\\n\\n 格式 yield。",
+          "StreamingResponse 使用 text/event-stream 持续 flush。",
+          "连接断开时由 with_cancellation/StreamingResponse 取消 generator。"
+        ],
+        143: [
+          "finish_reason=error 时抛 GenerationError。",
+          "tool parser 若检测到 tool calls，把 finish_reason 改写为 tool_calls。",
+          "补发 partial JSON 解析阶段未输出的 tool argument 尾部。",
+          "include_usage 时发送 choices=[] 的最终 usage chunk。"
+        ],
+        144: [
+          "所有 choice 完成后发送 data: [DONE]。",
+          "若前面发生 GenerationError/异常，先发送 SSE error 事件。",
+          "客户端以 [DONE] 作为流结束信号。",
+          "服务端释放请求状态与 KV/encoder cache。"
+        ],
+        145: [
+          "async for 消费 engine generator，只保留最后一个 RequestOutput。",
+          "无输出时返回 500 InternalServerError。",
+          "客户端取消时返回 Client disconnected 错误响应。",
+          "有 final_res 后进入 choices、message、usage 组装。"
+        ],
+        146: [
+          "检查 output.finish_reason 是否为 error。",
+          "error 表示 retryable request-level internal error。",
+          "抛出 GenerationError，由全局 exception handler 转为 500。",
+          "非 error 的 stop/length/tool_calls 保持原语义。"
+        ],
+        147: [
+          "Harmony token ids 进入专用 parse_chat_output/tool parser。",
+          "普通模型按 reasoning parser 拆出 reasoning 与 content。",
+          "tool parser 从 content 中抽取 tool calls，并按 tool_choice 生成 ID。",
+          "写入 ChatMessage 与 ChatCompletionResponseChoice，设置最终 finish_reason。"
+        ],
+        148: [
+          "prompt_tokens = decoder prompt token ids + 可选 encoder prompt token ids。",
+          "completion_tokens = 所有 choices 的 output token ids 长度之和。",
+          "total_tokens = prompt_tokens + completion_tokens。",
+          "启用 prompt_tokens_details 且 cached tokens 非零时附加 cached_tokens。"
+        ],
+        149: [
+          "设置 id、created、model、choices 和 usage。",
+          "按请求填充 prompt_logprobs、prompt_token_ids 与 kv_transfer_params。",
+          "object 固定为 chat.completion。",
+          "返回的响应对象由路由序列化为 JSON。"
+        ],
+        150: [
+          "ErrorResponse 使用 error.code 作为 HTTP status。",
+          "ChatCompletionResponse 转 dict 后放入 JSONResponse。",
+          "非流式响应附带 endpoint load metrics header。",
+          "若是 AsyncGenerator 则改走 StreamingResponse。"
+        ],
+        151: [
+          "JSONResponse 完整 body 交给 ASGI send。",
+          "StreamingResponse 则持续发送每个 SSE chunk。",
+          "load_aware_call 的 background task 在响应结束后递减 server_load_metrics。",
+          "客户端断开时 disconnect listener/StreamingResponse 触发取消清理。"
+        ],
+        152: [
+          "客户端断开或 generator 取消触发 CancelledError/GeneratorExit。",
+          "AsyncLLM.generate 调用 abort，OutputProcessor 移除 request state。",
+          "AsyncMPClient 向 EngineCore 发送 ABORT。",
+          "Scheduler.finish_requests 释放 KV/encoder cache，并把状态标记为 aborted。"
+        ]
+      };
+      const LOGIC_DETAILS = Object.assign(
+        {},
+        LOGIC_PHASE_1,
+        LOGIC_PHASE_2,
+        LOGIC_PHASE_3,
+        LOGIC_PHASE_4,
+        LOGIC_PHASE_5,
+        LOGIC_PHASE_6,
+        LOGIC_PHASE_7,
+        LOGIC_PHASE_8,
+        LOGIC_PHASE_9
+      );
+      const timeline = document.getElementById("timeline-content");
+      const nav = document.getElementById("stage-nav");
+      const mobileNav = document.getElementById("mobile-stage-nav");
+      const searchInput = document.getElementById("step-search");
+      const searchCount = document.getElementById("search-count");
+      const resultSummary = document.getElementById("result-summary");
+      const emptyState = document.getElementById("empty-state");
+      const filterButtons = Array.from(document.querySelectorAll("#mode-filters .filter-btn"));
+      const backTop = document.getElementById("back-top");
+
+      const state = {
+        query: "",
+        mode: "all",
+        visible: steps.length
+      };
+
+      const normalize = (value) =>
+        String(value || "").toLocaleLowerCase("zh-CN").replace(/\s+/g, " ").trim();
+
+      const escapeHtml = (value) =>
+        String(value ?? "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#39;");
+
+      const modeClass = (mode) => `mode-${mode}`;
+      const modeLabel = (mode) => ({
+        http: "HTTP",
+        async: "ASYNC",
+        async_gen: "ASYNC GEN",
+        sync: "SYNC",
+        thread: "THREAD",
+        ipc: "IPC",
+        gpu: "GPU",
+        sse: "SSE"
+      }[mode] || mode.toUpperCase());
+
+      const logicItems = (logic) => {
+        let items = String(logic || "")
+          .split(/[；;。]/)
+          .map((item) => item.trim())
+          .filter(Boolean);
+        if (items.length <= 1) {
+          items = String(logic || "")
+            .split(/，/)
+            .map((item) => item.trim())
+            .filter(Boolean);
+        }
+        if (items.length === 0) items = ["该步骤完成当前子任务。"];
+        if (items.length === 1) {
+          items.push("完成后通过返回值、异常或副作用把控制流或数据交给下一跳。");
+        }
+        return items;
+      };
+
+      const nextHopFor = (step) => {
+        if (step.next) return step.next;
+        if (NEXT_OVERRIDES[step.id]) return NEXT_OVERRIDES[step.id];
+        const next = stepMap.get(step.id + 1);
+        if (!next) return "请求生命周期结束。";
+        return `${next.caller} → ${next.callee}（步骤 ${String(next.id).padStart(3, "0")}）`;
+      };
+
+      function buildNav(target) {
+        target.innerHTML = STAGES.map(([id, title]) => {
+          const count = steps.filter((step) => step.stage === id).length;
+          return `
+            <a href="#stage-${id}" data-stage-link="${id}">
+              <span>${String(id).padStart(2, "0")}</span>
+              <strong>${escapeHtml(title)}</strong>
+              <em>${count} calls</em>
+            </a>
+          `;
+        }).join("");
+      }
+
+      function buildTimeline() {
+        timeline.innerHTML = STAGES.map(([stageId, title, tech]) => {
+          const stageSteps = steps.filter((step) => step.stage === stageId);
+          return `
+            <section id="stage-${stageId}" class="phase stage-section" data-stage="${stageId}">
+              <header class="phase-header">
+                <div class="phase-letter">${stageId}</div>
+                <div>
+                  <p class="phase-kicker">PHASE ${String(stageId).padStart(2, "0")} · ${stageSteps.length} CALLS</p>
+                  <h2>${escapeHtml(title)}</h2>
+                  <p>${escapeHtml(tech)}</p>
+                </div>
+              </header>
+              <div class="step-list">
+                ${stageSteps.map(renderStep).join("")}
+              </div>
+            </section>
+          `;
+        }).join("");
+      }
+
+      function renderStep(step) {
+        const absolutePath = step.file ? `${REPO_ROOT}/${step.file}` : "";
+        const pathText = step.file
+          ? `${absolutePath}${step.lineLabel ? ` · ${step.lineLabel}` : ""}`
+          : "无单一 vLLM 源码（网络或运行时边界）";
+        const sourceHref = step.file
+          ? `file://${absolutePath}${step.startLine ? `#L${step.startLine}` : ""}`
+          : "";
+        const editorLinks = step.file && step.startLine
+          ? EDITOR_SCHEMES.map(({ scheme, label }) => ({
+              scheme,
+              label,
+              href: `${scheme}://file${absolutePath}:${step.startLine}:1`
+            }))
+          : [];
+        const stage = stageMap.get(step.stage);
+        const numberedLogic = Array.isArray(step.logic)
+          ? step.logic
+          : (LOGIC_DETAILS[step.id] || logicItems(step.logic));
+        const nextHop = nextHopFor(step);
+        const displayId = typeof step.id === "number"
+          ? String(step.id).padStart(3, "0")
+          : String(step.id);
+        const searchText = normalize([
+          step.id,
+          step.caller,
+          step.callee,
+          modeLabel(step.mode),
+          absolutePath,
+          step.cls,
+          step.lineLabel,
+          step.purpose,
+          step.inputs,
+          step.outputs,
+          numberedLogic.join(" "),
+          nextHop
+        ].join(" "));
+
+        return `
+          <article
+            id="step-${step.id}"
+            class="step"
+            data-step="${step.id}"
+            data-stage="${step.stage}"
+            data-mode="${step.mode}"
+            data-tags="${step.mode}"
+            data-logic-source="${Array.isArray(step.logic) || LOGIC_DETAILS[step.id] ? "curated" : "derived"}"
+            data-logic-count="${numberedLogic.length}"
+            data-search="${escapeHtml(searchText)}"
+          >
+            <div class="step-rail" aria-hidden="true">
+              <span class="step-number">${displayId}</span>
+              <span class="rail-line"></span>
+            </div>
+            <div class="step-body">
+              <header class="step-header">
+                <div>
+                  <div class="step-kicker">STEP ${displayId} · PHASE ${step.stage}</div>
+                  <h3>${escapeHtml(step.caller)} → ${escapeHtml(step.callee)}</h3>
+                </div>
+                <div class="step-status">
+                  <span class="mode ${modeClass(step.mode)}">${modeLabel(step.mode)}</span>
+                  <span class="chip">STAGE ${step.stage} · ${escapeHtml(stage.title)}</span>
+                </div>
+              </header>
+
+              <div class="call-path" aria-label="调用方向">
+                <span class="actor actor-${step.mode}">${escapeHtml(step.caller)}</span>
+                <span class="call-edge">
+                  <span class="edge-line"></span>
+                  <span class="edge-mode">${modeLabel(step.mode)}</span>
+                  <span class="edge-head">›</span>
+                </span>
+                <span class="actor actor-${step.mode}">${escapeHtml(step.callee)}</span>
+              </div>
+
+              <p class="purpose"><span class="field-label">用途</span>${escapeHtml(step.purpose)}</p>
+
+              <div class="step-grid">
+                <section class="io-block">
+                  <h4>入参</h4>
+                  <p>${escapeHtml(step.inputs)}</p>
+                </section>
+                <section class="io-block">
+                  <h4>出参 / 结果</h4>
+                  <p>${escapeHtml(step.outputs)}</p>
+                </section>
+                <section class="logic-block">
+                  <h4>基础逻辑</h4>
+                  <ol>
+                    ${numberedLogic.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+                  </ol>
+                </section>
+                <section class="next-block">
+                  <h4>下一跳</h4>
+                  <p>${escapeHtml(nextHop)}</p>
+                </section>
+              </div>
+
+              <footer class="source-bar">
+                <div class="source-item source-file">
+                  <span class="source-label">绝对路径</span>
+                  <code class="${step.file ? "" : "source-missing"}">${escapeHtml(pathText)}</code>
+                </div>
+                <div class="source-item">
+                  <span class="source-label">所属类 / 模块</span>
+                  <code>${escapeHtml(step.cls)}</code>
+                </div>
+                ${step.file
+                  ? `<span class="source-actions">
+                       ${editorLinks.map((link) => `<a class="source-link editor-source-link ${link.scheme}-source-link" href="${escapeHtml(link.href)}" title="${escapeHtml(`${link.label} 精确定位到 ${absolutePath}:${step.startLine}`)}">${link.label} ${escapeHtml(step.lineLabel || "源码")} ↗</a>`).join("")}
+                       <a class="source-link file-source-link" href="${escapeHtml(sourceHref)}" target="_blank" rel="noopener" title="${escapeHtml(absolutePath)}">原始文件 ↗</a>
+                     </span>`
+                  : `<span class="source-missing">无代码链接</span>`}
+              </footer>
+            </div>
+          </article>
+        `;
+      }
+
+      function applyFilters() {
+        const query = state.query;
+        let visible = 0;
+
+        document.querySelectorAll(".step").forEach((card) => {
+          const matchesMode = state.mode === "all" || card.dataset.mode === state.mode;
+          const matchesSearch = !query || card.dataset.search.includes(query);
+          const show = matchesMode && matchesSearch;
+          card.hidden = !show;
+          if (show) visible += 1;
+        });
+
+        document.querySelectorAll(".phase").forEach((section) => {
+          section.hidden = !section.querySelector(".step:not([hidden])");
+        });
+
+        state.visible = visible;
+        searchCount.textContent = `${visible} calls`;
+        resultSummary.textContent = `显示 ${visible} / ${steps.length} 步`;
+        emptyState.hidden = visible !== 0;
+      }
+
+      function setMode(mode) {
+        state.mode = mode;
+        filterButtons.forEach((button) => {
+          button.setAttribute("aria-pressed", String(button.dataset.mode === mode));
+        });
+        applyFilters();
+      }
+
+      function updateActiveNav() {
+        const marker = window.scrollY + 130;
+        const sections = Array.from(document.querySelectorAll(".stage-section:not([hidden])"));
+        let activeStage = sections[0]?.dataset.stage;
+        sections.forEach((section) => {
+          if (section.offsetTop <= marker) activeStage = section.dataset.stage;
+        });
+        document.querySelectorAll("[data-stage-link]").forEach((link) => {
+          const active = link.dataset.stageLink === activeStage;
+          link.classList.toggle("is-active", active);
+          link.classList.toggle("active", active);
+          if (active) link.setAttribute("aria-current", "location");
+          else link.removeAttribute("aria-current");
+        });
+      }
+
+      buildNav(nav);
+      buildNav(mobileNav);
+      buildTimeline();
+      applyFilters();
+
+      document.getElementById("stat-steps").textContent = String(steps.length);
+
+      searchInput.addEventListener("input", () => {
+        state.query = normalize(searchInput.value);
+        applyFilters();
+      });
+
+      document.addEventListener("keydown", (event) => {
+        const active = document.activeElement;
+        const typing = active && (
+          active.tagName === "INPUT" ||
+          active.tagName === "TEXTAREA" ||
+          active.tagName === "SELECT" ||
+          active.isContentEditable
+        );
+        if (event.key === "/" && !typing) {
+          event.preventDefault();
+          searchInput.focus();
+          searchInput.select();
+        }
+        if (event.key === "Escape" && active === searchInput) {
+          searchInput.value = "";
+          state.query = "";
+          applyFilters();
+          searchInput.blur();
+        }
+      });
+
+      filterButtons.forEach((button) => {
+        button.addEventListener("click", () => setMode(button.dataset.mode));
+      });
+
+      let ticking = false;
+      window.addEventListener("scroll", () => {
+        if (!ticking) {
+          ticking = true;
+          requestAnimationFrame(() => {
+            tickMath();
+            ticking = false;
+          });
+        }
+        backTop.classList.toggle("visible", window.scrollY > 700);
+      }, { passive: true });
+
+      function tickMath() {
+        updateActiveNav();
+      }
+
+      backTop.addEventListener("click", () => window.scrollTo({ top: 0, behavior: "smooth" }));
+
+      document.querySelectorAll(".mobile-stage-nav .phase-nav a").forEach((link) => {
+        link.addEventListener("click", () => {
+          const details = link.closest("details");
+          if (details) details.open = false;
+        });
+      });
+
+      updateActiveNav();
+      if (window.location.hash) {
+        requestAnimationFrame(() => {
+          const target = document.getElementById(window.location.hash.slice(1));
+          if (target) target.scrollIntoView({ block: "start" });
+        });
+      }
+    })();
+  </script>
+</body>
+</html>
