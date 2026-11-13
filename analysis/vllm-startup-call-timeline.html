@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>vLLM v0.20.0 · 服务启动调用时序</title>
+<style>
+:root{
+  --bg:#f7f8fa; --bg2:#ffffff; --fg:#1a202c; --fg2:#4a5568; --fg3:#718096;
+  --border:#e2e8f0; --accent:#2563eb; --accent2:#7c3aed; --ok:#059669; --warn:#d97706; --err:#dc2626;
+  --card:#ffffff; --code-bg:#f1f5f9; --code-fg:#0f172a; --chip-op:rgba(37,99,235,.08);
+  --shadow:0 1px 3px rgba(0,0,0,.08); --shadow-lg:0 8px 24px rgba(0,0,0,.10);
+}
+html[data-theme="dark"]{
+  --bg:#0d1117; --bg2:#161b22; --fg:#e6edf3; --fg2:#9aa4b2; --fg3:#6e7a89;
+  --border:#30363d; --accent:#58a6ff; --accent2:#bc8cff; --ok:#3fb950; --warn:#d29922; --err:#f85149;
+  --card:#161b22; --code-bg:#1c2128; --code-fg:#e6edf3; --chip-op:rgba(88,166,255,.12);
+  --shadow:0 1px 3px rgba(0,0,0,.4); --shadow-lg:0 8px 24px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--fg);line-height:1.6}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+code{background:var(--code-bg);color:var(--code-fg);padding:.1em .35em;border-radius:4px;font-size:.9em}
+pre{background:var(--code-bg);color:var(--code-fg);padding:12px 14px;border-radius:8px;overflow-x:auto;font-size:.85rem;line-height:1.5;border:1px solid var(--border)}
+pre code{background:none;padding:0}
+
+/* layout */
+.layout{display:flex;min-height:100vh}
+.sidebar{width:290px;flex-shrink:0;background:var(--bg2);border-right:1px solid var(--border);position:sticky;top:0;height:100vh;overflow-y:auto;padding:16px 14px 32px;z-index:20}
+.main{flex:1;min-width:0;padding:24px 32px 80px;max-width:1080px;margin:0 auto}
+@media (max-width:1000px){
+  .layout{display:block}
+  .sidebar{position:fixed;left:0;top:0;width:290px;transform:translateX(-100%);transition:transform .25s;box-shadow:var(--shadow-lg);height:100vh}
+  .sidebar.open{transform:translateX(0)}
+  .main{padding:16px 14px 60px}
+}
+#sidebarToggle{display:none;position:fixed;top:10px;left:10px;z-index:50;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px 12px;cursor:pointer;font-size:1rem;color:var(--fg)}
+@media (max-width:1000px){#sidebarToggle{display:block}}
+
+/* header */
+header.hero{margin-bottom:20px}
+header.hero h1{font-size:1.65rem;margin:0 0 6px;line-height:1.3}
+header.hero .sub{color:var(--fg2);font-size:.95rem}
+.badges{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.badge{display:inline-block;font-size:.75rem;background:var(--chip-op);color:var(--accent);border:1px solid var(--border);border-radius:99px;padding:2px 10px}
+
+/* controls */
+.controls{position:sticky;top:0;background:var(--bg);z-index:10;padding:10px 0;border-bottom:1px solid var(--border);margin-bottom:18px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.controls input[type=search]{flex:1;min-width:180px;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--bg2);color:var(--fg);font-size:.9rem}
+.controls select{padding:8px;border:1px solid var(--border);border-radius:8px;background:var(--bg2);color:var(--fg);font-size:.85rem}
+#themeToggle{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:8px 10px;cursor:pointer;color:var(--fg)}
+#searchStats{font-size:.8rem;color:var(--fg3);width:100%}
+
+/* phase nav */
+.phase-nav{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0}
+.phase-nav a{font-size:.8rem;padding:4px 12px;border-radius:99px;border:1px solid var(--border);background:var(--bg2);color:var(--fg2)}
+.phase-nav a.active{background:var(--accent);border-color:var(--accent);color:#fff}
+
+/* phase section */
+.phase{margin:34px 0 8px;scroll-margin-top:70px}
+.phase-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.phase-head h2{font-size:1.25rem;margin:0;border-left:4px solid var(--accent);padding-left:10px}
+.phase-head .meta{font-size:.8rem;color:var(--fg3)}
+.phase-desc{color:var(--fg2);font-size:.9rem;margin:6px 0 12px;padding-left:14px}
+
+/* step card */
+.step{background:var(--card);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow);margin:14px 0;scroll-margin-top:80px;overflow:hidden}
+.step.hidden{display:none}
+.step-head{display:flex;gap:10px;align-items:flex-start;padding:12px 16px;cursor:pointer;user-select:none}
+.step-head:hover{background:var(--chip-op)}
+.step-num{flex-shrink:0;font-weight:700;font-size:.8rem;color:#fff;background:var(--accent);border-radius:8px;min-width:34px;text-align:center;padding:3px 6px;margin-top:2px}
+.step-title{font-weight:600;font-size:.98rem;flex:1}
+.step-chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:4px}
+.chip{font-size:.7rem;padding:1px 8px;border-radius:99px;border:1px solid transparent;font-weight:500}
+.chip.sync{background:rgba(5,150,105,.12);color:var(--ok);border-color:rgba(5,150,105,.3)}
+.chip.async{background:rgba(37,99,235,.12);color:var(--accent);border-color:rgba(37,99,235,.3)}
+.chip.threadpool{background:rgba(217,119,6,.14);color:var(--warn);border-color:rgba(217,119,6,.3)}
+.chip.ipc{background:rgba(124,58,237,.14);color:var(--accent2);border-color:rgba(124,58,237,.3)}
+.chip.gpu{background:rgba(220,38,38,.12);color:var(--err);border-color:rgba(220,38,38,.3)}
+.chip.sse{background:rgba(14,165,233,.14);color:#0ea5e9;border-color:rgba(14,165,233,.3)}
+.chip.proc{background:rgba(107,114,128,.14);color:var(--fg2);border-color:rgba(107,114,128,.3)}
+html[data-theme="dark"] .chip.sse{color:#7dd3fc}
+.chip.branch{background:rgba(234,88,12,.12);color:#ea580c;border-color:rgba(234,88,12,.35)}
+.step-body{padding:0 16px 14px 60px;border-top:1px dashed var(--border)}
+@media (max-width:640px){.step-body{padding-left:16px}}
+.step-body .field{margin:10px 0}
+.step-body .label{font-size:.72rem;font-weight:700;color:var(--fg3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px}
+.step-body ol{margin:4px 0 0;padding-left:20px;font-size:.88rem;color:var(--fg)}
+.step-body ol li{margin:3px 0}
+.next-hop{font-size:.85rem;background:var(--code-bg);border:1px solid var(--border);border-radius:8px;padding:8px 12px;margin-top:8px}
+.next-hop .label{font-size:.7rem;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.05em}
+.src-links{font-size:.78rem;margin-top:8px;display:flex;flex-wrap:wrap;gap:4px 14px;color:var(--fg3)}
+.src-links a{white-space:nowrap}
+.note{font-size:.85rem;color:var(--fg2);background:var(--chip-op);border-left:3px solid var(--accent2);padding:6px 10px;border-radius:0 8px 8px 0;margin-top:8px}
+.note.warn{border-left-color:var(--warn)}
+.note.err{border-left-color:var(--err)}
+
+/* toc */
+.toc-group{margin-bottom:4px}
+.toc-group-title{font-size:.72rem;font-weight:700;color:var(--fg3);text-transform:uppercase;letter-spacing:.06em;margin:12px 0 4px}
+.toc-group a{display:block;font-size:.83rem;padding:2px 6px;border-radius:6px;color:var(--fg2)}
+.toc-group a:hover{background:var(--chip-op);text-decoration:none}
+.toc-group a.active{color:var(--accent);font-weight:600}
+mark{background:rgba(250,204,21,.5);color:inherit;border-radius:2px;padding:0 1px}
+html[data-theme="dark"] mark{background:rgba(250,204,21,.35)}
+
+/* legend */
+.legend{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0;font-size:.78rem;color:var(--fg2);align-items:center}
+footer{margin-top:48px;padding-top:16px;border-top:1px solid var(--border);color:var(--fg3);font-size:.8rem}
+</style>
+</head>
+<body>
+<button id="sidebarToggle" aria-label="切换目录">☰ 目录</button>
+<div class="layout">
+<nav class="sidebar" id="sidebar">
+  <div style="font-weight:700;font-size:.95rem;margin-bottom:4px">启动调用时序</div>
+  <div style="font-size:.75rem;color:var(--fg3);margin-bottom:8px">vLLM v0.20.0 · 源码级分析</div>
+  <div class="controls" style="position:static;border:none;padding:0;margin-bottom:10px">
+    <input type="search" id="searchBox" placeholder="搜索步骤 / 函数 / 文件…" style="width:100%">
+  </div>
+  <div id="toc"></div>
+</nav>
+<div class="main">
+<header class="hero">
+  <h1>vLLM v0.20.0 · 服务启动调用时序</h1>
+  <div class="sub">vllm serve 从命令行到 HTTP ready 的完整初始化链 · 基于 v0.20.0 标签源码</div>
+  <div class="badges"><span class="badge">v0.20.0</span><span class="badge">离线文档 · 无 CDN</span><span class="badge">7 个阶段 · 17 个步骤</span></div>
+</header>
+<div class="controls">
+  <input type="search" id="searchBox2" placeholder="全文搜索：步骤标题、函数、文件…" aria-label="搜索">
+  <select id="typeFilter" aria-label="调用类型筛选">
+    <option value="">全部调用类型</option>
+  </select>
+  <button id="expandAll">展开全部</button>
+  <button id="collapseAll">折叠全部</button>
+  <button id="themeToggle" title="切换主题">◐</button>
+  <div id="searchStats"></div>
+</div>
+<div class="legend" id="legend"></div>
+<nav class="phase-nav" id="phaseNav"></nav>
+<main id="content"></main>
+<footer>vLLM v0.20.0 启动时序分析 · 本文档由 AI 辅助生成（Claude），行号基于 v0.20.0 标签 · 姊妹篇：vllm-chat-completions-call-chain.html</footer>
+</div>
+</div>
+<script>
+"use strict";
+const DATA = {"phases": [{"id": "s01", "title": "S01 CLI 与进程引导", "meta": "终端 → API server 主进程", "desc": "vllm serve 从命令行到 asyncio 事件循环的引导过程。", "steps": [{"num": "1", "title": "CLI 入口与子命令分发", "types": ["sync"], "purpose": "console_scripts 入口点，懒加载注册各子命令。", "input": "sys.argv", "output": "ServeSubcommand 实例", "logic": ["pyproject.toml 定义 vllm = vllm.entrypoints.cli.main:main。", "main() 懒加载注册 serve / chat / complete 等子命令。", "argparse 解析出 AsyncEngineArgs 字段。"], "next": "ServeSubcommand.cmd（下一步）", "src": ["<b>main</b> <code>vllm/entrypoints/cli/main.py:15</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/entrypoints/cli/main.py:15\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/entrypoints/cli/main.py:15\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/entrypoints/cli/main.py#L15\" title=\"原始文件\">原始文件</a>"]}, {"num": "2", "title": "进入事件循环", "types": ["sync", "async"], "purpose": "单 API server 主路径：uvloop.run(run_server(args))。", "input": "args", "output": "asyncio 事件循环中的 run_server 协程", "logic": ["cmd() 解析 --api-server-count / --headless 等 DP 拓扑参数。", "api-server-count==1（默认）：uvloop.run(run_server(args))。", ">1 时走 run_multi_api_server：launcher 进程先建引擎，再 fork 多个 API server 子进程。"], "next": "api_server.run_server（下一步）", "src": ["<b>ServeSubcommand</b> <code>vllm/entrypoints/cli/serve.py:37</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/entrypoints/cli/serve.py:37\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/entrypoints/cli/serve.py:37\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/entrypoints/cli/serve.py#L37\" title=\"原始文件\">原始文件</a>", "<b>uvloop.run</b> <code>vllm/entrypoints/cli/serve.py:122</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/entrypoints/cli/serve.py:122\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/entrypoints/cli/serve.py:122\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/entrypoints/cli/serve.py#L122\" title=\"原始文件\">原始文件</a>"]}], "navGroup": "启动时序"}, {"id": "s02", "title": "S02 API server 预备", "meta": "监听 socket 与运行环境", "desc": "在加载模型（最耗时的阶段）之前先绑定端口，使客户端尽早得到 connection refused 之外的确定性错误。", "steps": [{"num": "1", "title": "run_server：日志与服务器预备", "types": ["sync"], "purpose": "装饰日志前缀，执行 setup_server。", "input": "args", "output": "已绑定的 socket", "logic": ["decorate_logs('APIServer') 设置日志前缀。", "setup_server(args) 执行全部预备步骤（@instrument 'API server setup'）。"], "next": "setup_server（下一步）", "src": ["<b>run_server</b> <code>vllm/entrypoints/openai/api_server.py:671</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/entrypoints/openai/api_server.py:671\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/entrypoints/openai/api_server.py:671\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/entrypoints/openai/api_server.py#L671\" title=\"原始文件\">原始文件</a>"]}, {"num": "2", "title": "setup_server：插件、端口、ulimit", "types": ["sync"], "purpose": "导入 parser 插件、绑定监听端口、设置资源限制。", "input": "args", "output": "listen socket、信号 handler", "logic": ["加载 tool parser / reasoning parser 第三方插件（entrypoint 注册）。", "validate_api_server_args 校验 parser 名称已在注册表中。", "create_server_socket：TCP 或 UDS bind——端口先开，但请求要等引擎 READY。", "set_ulimit（nofile）+ SIGINT/SIGTERM handler。"], "next": "run_server_worker（下一步）", "src": ["<b>setup_server</b> <code>vllm/entrypoints/openai/api_server.py:534</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/entrypoints/openai/api_server.py:534\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/entrypoints/openai/api_server.py:534\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/entrypoints/openai/api_server.py#L534\" title=\"原始文件\">原始文件</a>", "<b>create_server_socket</b> <code>vllm/entrypoints/openai/api_server.py:496</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/entrypoints/openai/api_server.py:496\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/entrypoints/openai/api_server.py:496\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/entrypoints/openai/api_server.py#L496\" title=\"原始文件\">原始文件</a>"]}, {"num": "3", "title": "build_async_engine_client", "types": ["async", "proc"], "purpose": "创建 AsyncLLM 的异步上下文管理器；forkserver 预导入优化。", "input": "args、client_config", "output": "AsyncLLM（context manager）", "logic": ["VLLM_WORKER_MULTIPROC_METHOD=forkserver 时 set_forkserver_preload(['vllm.v1.engine.async_llm'])。", "AsyncEngineArgs.from_cli_args → create_engine_config 产出 VllmConfig。", "async with build_async_engine_client_from_engine_args(...)。"], "next": "AsyncLLM.from_vllm_config（下一步）", "src": ["<b>build_async_engine_client</b> <code>vllm/entrypoints/openai/api_server.py:78</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/entrypoints/openai/api_server.py:78\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/entrypoints/openai/api_server.py:78\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/entrypoints/openai/api_server.py#L78\" title=\"原始文件\">原始文件</a>", "<b>from_engine_args</b> <code>vllm/entrypoints/openai/api_server.py:109</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/entrypoints/openai/api_server.py:109\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/entrypoints/openai/api_server.py:109\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/entrypoints/openai/api_server.py#L109\" title=\"原始文件\">原始文件</a>"]}], "navGroup": "启动时序"}, {"id": "s03", "title": "S03 AsyncLLM 前端构建", "meta": "API 进程内", "desc": "构建引擎前端：tokenizer/renderer、Input/OutputProcessor、IPC 客户端、指标。", "steps": [{"num": "1", "title": "AsyncLLM.from_vllm_config", "types": ["async"], "purpose": "classmethod 入口：确定 executor 类并调用 __init__。", "input": "vllm_config", "output": "AsyncLLM 实例", "logic": ["executor_class = Executor.get_class(vllm_config)（MultiprocExecutor / Ray / external）。", "若已在 asyncio loop 中，output_handler task 立即启动。"], "next": "__init__（下一步）", "src": ["<b>from_vllm_config</b> <code>vllm/v1/engine/async_llm.py:205</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/v1/engine/async_llm.py:205\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/v1/engine/async_llm.py:205\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/v1/engine/async_llm.py#L205\" title=\"原始文件\">原始文件</a>"]}, {"num": "2", "title": "tokenizer 与 renderer 加载", "types": ["sync"], "purpose": "加载 HF tokenizer（lru_cache 缓存）并实例化渲染器。", "input": "model_config", "output": "HfRenderer（含 tokenizer）", "logic": ["renderer_from_config → cached_tokenizer_from_config → tokenizers/registry.get_tokenizer。", "RENDERER_REGISTRY.load_renderer 实例化 HfRenderer（chat template 渲染载体）。", "mistral 等模型加载对应特化 renderer。"], "next": "Input/OutputProcessor（下一步）", "src": ["<b>renderer_from_config</b> <code>vllm/renderers/registry.py:80</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/renderers/registry.py:80\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/renderers/registry.py:80\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/renderers/registry.py#L80\" title=\"原始文件\">原始文件</a>", "<b>get_tokenizer</b> <code>vllm/tokenizers/registry.py:195</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/tokenizers/registry.py:195\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/tokenizers/registry.py:195\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/tokenizers/registry.py#L195\" title=\"原始文件\">原始文件</a>"]}, {"num": "3", "title": "InputProcessor / OutputProcessor / IPC 客户端", "types": ["sync", "ipc"], "purpose": "装配前端三大件。", "input": "vllm_config、renderer", "output": "AsyncLLM 可用", "logic": ["InputProcessor：请求校验、tokenize、mm 特征化（API 进程内）。", "OutputProcessor：RequestState 状态机、detokenizer/logprobs/stats 宿主。", "EngineCoreClient.make_async_mp_client（@instrument 'Overall Loading'）：DP 拓扑决定 AsyncMPClient / DPAsyncMPClient / DPLBAsyncMPClient。", "StatLoggerManager 装配 Prometheus/日志统计。"], "next": "EngineCore 进程 spawn（下一阶段）", "src": ["<b>AsyncLLM.__init__</b> <code>vllm/v1/engine/async_llm.py:73</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/v1/engine/async_llm.py:73\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/v1/engine/async_llm.py:73\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/v1/engine/async_llm.py#L73\" title=\"原始文件\">原始文件</a>", "<b>make_async_mp_client</b> <code>vllm/v1/engine/core_client.py:107</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/v1/engine/core_client.py:107\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/v1/engine/core_client.py:107\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/v1/engine/core_client.py#L107\" title=\"原始文件\">原始文件</a>"]}], "navGroup": "启动时序"}, {"id": "s04", "title": "S04 EngineCore 进程与握手", "meta": "子进程 + ZMQ", "desc": "spawn 引擎子进程，建立 ZMQ 拓扑并完成 READY 握手。", "steps": [{"num": "1", "title": "launch_core_engines", "types": ["proc", "ipc"], "purpose": "创建 EngineCore 子进程并等待启动消息。", "input": "vllm_config、zmq 地址", "output": "CoreEngineProcManager", "logic": ["多模态 torch_shm 时建 tensor_queue（IPC 旁路）。", "DP>1 内部 LB 时启动 DPCoordinator 独立进程（XSUB 拓扑）。", "Ray 后端走 CoreEngineActorManager；否则 CoreEngineProcManager 以 multiprocessing spawn 启动每 rank 一个 run_engine_core 进程。", "wait_for_engine_startup 等待 HANDSHAKE/READY 消息。"], "next": "EngineCoreProc.run_engine_core（下一步）", "src": ["<b>launch_core_engines</b> <code>vllm/v1/engine/utils.py:955</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/v1/engine/utils.py:955\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/v1/engine/utils.py:955\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/v1/engine/utils.py#L955\" title=\"原始文件\">原始文件</a>", "<b>CoreEngineProcManager</b> <code>vllm/v1/engine/utils.py:83</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/v1/engine/utils.py:83\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/v1/engine/utils.py:83\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/v1/engine/utils.py#L83\" title=\"原始文件\">原始文件</a>"]}, {"num": "2", "title": "EngineCoreProc 子进程初始化与握手", "types": ["ipc", "proc"], "purpose": "子进程入口：进程改名、ZMQ DEALER 握手、启动 IO 线程。", "input": "ipc_args、vllm_config", "output": "引擎与前端的双向通道", "logic": ["run_engine_core 设进程名 'EngineCore'；startup_handshake 发 HELLO 收 ZMQ 地址。", "_perform_handshake：DEALER 连前端 ROUTER，发送 EngineCoreReadyResponse（含 num_gpu_blocks/max_model_len 回填）。", "EngineCoreProc.__init__：super().__init__（EngineCore 逻辑）+ input/output daemon 线程。", "DP 场景等 DPCoordinator READY。"], "next": "EngineCore.__init__（下一步）", "src": ["<b>run_engine_core</b> <code>vllm/v1/engine/core.py:1060</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/v1/engine/core.py:1060\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/v1/engine/core.py:1060\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/v1/engine/core.py#L1060\" title=\"原始文件\">原始文件</a>", "<b>EngineCoreProc.__init__</b> <code>vllm/v1/engine/core.py:809</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/v1/engine/core.py:809\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/v1/engine/core.py:809\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/v1/engine/core.py#L809\" title=\"原始文件\">原始文件</a>"]}, {"num": "3", "title": "客户端 READY 轮询与存活监控", "types": ["ipc"], "purpose": "MPClient 侧等待所有引擎 READY，并启动死亡监控。", "input": "input socket", "output": "engine_ranks_managed、monitor 线程", "logic": ["轮询 recv_multipart 收各引擎 READY（超时 VLLM_ENGINE_READY_TIMEOUT_S）。", "_apply_ready_response 回填 num_gpu_blocks / max_model_len 到 vllm_config。", "start_engine_core_monitor：监控线程检测子进程退出 → engine_dead=True → 后续全部 EngineDeadError。"], "next": "EngineCore 初始化（下一阶段）", "src": ["<b>MPClient.__init__</b> <code>vllm/v1/engine/core_client.py:473</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/v1/engine/core_client.py:473\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/v1/engine/core_client.py:473\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/v1/engine/core_client.py#L473\" title=\"原始文件\">原始文件</a>", "<b>start_engine_core_monitor</b> <code>vllm/v1/engine/core_client.py:641</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/v1/engine/core_client.py:641\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/v1/engine/core_client.py:641\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/v1/engine/core_client.py#L641\" title=\"原始文件\">原始文件</a>"]}], "navGroup": "启动时序"}, {"id": "s05", "title": "S05 EngineCore 初始化", "meta": "引擎子进程内", "desc": "构建 executor、profile 显存、分配 KV cache、装配调度器。", "steps": [{"num": "1", "title": "Executor 构建与 Worker 子进程", "types": ["proc", "ipc"], "purpose": "executor_class(vllm_config) 再往下 spawn worker 子进程。", "input": "vllm_config", "output": "MultiprocExecutor + worker 进程组", "logic": ["load_general_plugins 加载平台/连接器插件。", "MultiprocExecutor._init_executor：建共享内存消息队列 rpc_broadcast_mq。", "WorkerProc.make_worker_process 每 TP/PP rank 一个子进程；WorkerProc.wait_for_ready。"], "next": "EngineCore KV cache 初始化（下一步）", "src": ["<b>executor_class</b> <code>vllm/v1/engine/core.py:109</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/v1/engine/core.py:109\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/v1/engine/core.py:109\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/v1/engine/core.py#L109\" title=\"原始文件\">原始文件</a>", "<b>_init_executor</b> <code>vllm/v1/executor/multiproc_executor.py:109</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/v1/executor/multiproc_executor.py:109\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/v1/executor/multiproc_executor.py:109\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/v1/executor/multiproc_executor.py#L109\" title=\"原始文件\">原始文件</a>"]}, {"num": "2", "title": "_initialize_kv_caches：profile 与配置计算", "types": ["gpu", "ipc"], "purpose": "通过 worker 做 memory profile，计算 KV cache 块数并下发。", "input": "kv_cache_specs、可用显存", "output": "KVCacheConfig", "logic": ["collective_rpc('get_kv_cache_spec') 收集每层 KV 布局描述（GPU）。", "determine_available_memory：worker 跑 profile_run（dummy forward）测可用显存。", "get_kv_cache_configs 计算 num_blocks（auto-fit 时可 update_max_model_len）。", "initialize_from_config 经 collective_rpc 下发配置并触发 KV 张量分配 + warmup/capture。"], "next": "Scheduler / StructuredOutputManager（下一步）", "src": ["<b>_initialize_kv_caches</b> <code>vllm/v1/engine/core.py:230</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/v1/engine/core.py:230\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/v1/engine/core.py:230\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/v1/engine/core.py#L230\" title=\"原始文件\">原始文件</a>", "<b>EngineCore.__init__</b> <code>vllm/v1/engine/core.py:92</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/v1/engine/core.py:92\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/v1/engine/core.py:92\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/v1/engine/core.py#L92\" title=\"原始文件\">原始文件</a>"]}, {"num": "3", "title": "Scheduler 与结构化输出", "types": ["sync"], "purpose": "构造调度器与 grammar 后端，引擎进入可服务状态。", "input": "vllm_config", "output": "EngineCore 就绪", "logic": ["StructuredOutputManager 初始化（xgrammar/outlines 后端，grammar CFG 编译器）。", "get_scheduler_cls：普通 Scheduler 或 AsyncScheduler（async_scheduling 开启时）。", "aborts_queue、prefix-caching block hasher、mm receiver cache 就绪。", "freeze_gc_heap / enable_envs_cache 运行时优化。"], "next": "回到前端：build_and_serve（S06）", "src": ["<b>StructuredOutputManager</b> <code>vllm/v1/engine/core.py:127</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/v1/engine/core.py:127\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/v1/engine/core.py:127\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/v1/engine/core.py#L127\" title=\"原始文件\">原始文件</a>", "<b>Scheduler 构造</b> <code>vllm/v1/engine/core.py:131</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/v1/engine/core.py:131\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/v1/engine/core.py:131\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/v1/engine/core.py#L131\" title=\"原始文件\">原始文件</a>"]}], "navGroup": "启动时序"}, {"id": "s06", "title": "S06 GPU Worker 初始化", "meta": "worker 子进程内 · GPU", "desc": "设备、权重、KV 张量与 CUDA graph 的完整 GPU 侧准备。", "steps": [{"num": "1", "title": "init_device 与分布式环境", "types": ["gpu"], "purpose": "Worker 子进程内的设备与通信初始化。", "input": "WorkerProc kwargs", "output": "GPU 上下文就绪", "logic": ["WorkerProc.__init__：WorkerWrapperBase.init_worker → Worker.__init__（matmul 精度、ElasticEP）。", "init_device：选 CUDA 设备、init_worker_distributed_environment（NCCL）、set_random_seed。", "MemorySnapshot 记录 baseline 显存；构造 GPUModelRunner（挂 MULTIMODAL_REGISTRY）。"], "next": "load_model（下一步）", "src": ["<b>init_device</b> <code>vllm/v1/worker/gpu_worker.py:219</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/v1/worker/gpu_worker.py:219\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/v1/worker/gpu_worker.py:219\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/v1/worker/gpu_worker.py#L219\" title=\"原始文件\">原始文件</a>", "<b>WorkerProc.__init__</b> <code>vllm/v1/executor/multiproc_executor.py:578</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/v1/executor/multiproc_executor.py:578\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/v1/executor/multiproc_executor.py:578\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/v1/executor/multiproc_executor.py#L578\" title=\"原始文件\">原始文件</a>"]}, {"num": "2", "title": "load_model 与 memory profile", "types": ["gpu"], "purpose": "权重加载与显存测量。", "input": "model 配置", "output": "available_kv_cache_memory_bytes", "logic": ["load_model → GPUModelRunner.load_model（@instrument 'Loading (GPU)'，weights 内存池上下文）。", "determine_available_memory：profile_run 用 dummy forward + dummy sampler run 测峰值。", "profile_cudagraph_memory 估计 CUDA graph 池开销。", "available_kv_cache_memory_bytes = baseline - 峰值 - graph 开销。"], "next": "KV cache 初始化（下一步）", "src": ["<b>load_model</b> <code>vllm/v1/worker/gpu_worker.py:318</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/v1/worker/gpu_worker.py:318\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/v1/worker/gpu_worker.py:318\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/v1/worker/gpu_worker.py#L318\" title=\"原始文件\">原始文件</a>", "<b>determine_available_memory</b> <code>vllm/v1/worker/gpu_worker.py:332</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/v1/worker/gpu_worker.py:332\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/v1/worker/gpu_worker.py:332\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/v1/worker/gpu_worker.py#L332\" title=\"原始文件\">原始文件</a>", "<b>profile_run</b> <code>vllm/v1/worker/gpu_model_runner.py:5754</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/v1/worker/gpu_model_runner.py:5754\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/v1/worker/gpu_model_runner.py:5754\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/v1/worker/gpu_model_runner.py#L5754\" title=\"原始文件\">原始文件</a>"]}, {"num": "3", "title": "KV 张量分配与 CUDA graph 捕获", "types": ["gpu"], "purpose": "initialize_from_config 与 compile_or_warm_up_model。", "input": "KVCacheConfig", "output": "可服务推理的 worker", "logic": ["initialize_from_config：设 num_gpu_blocks；ensure_kv_transfer_initialized；initialize_kv_cache 分配 KV 张量。", "compile_or_warm_up_model：各 compile size 逐个 _dummy_run（torch.compile 编译触发）。", "capture_model 按 cudagraph_capture_sizes 捕获 FULL/PIECEWISE CUDA graph（共享 memory pool）。", "_dummy_sampler_run 预热采样 kernel；重置随机 seed。"], "next": "回到前端：build_app（S07）", "src": ["<b>initialize_from_config</b> <code>vllm/v1/worker/gpu_worker.py:519</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/v1/worker/gpu_worker.py:519\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/v1/worker/gpu_worker.py:519\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/v1/worker/gpu_worker.py#L519\" title=\"原始文件\">原始文件</a>", "<b>compile_or_warm_up_model</b> <code>vllm/v1/worker/gpu_worker.py:554</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/v1/worker/gpu_worker.py:554\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/v1/worker/gpu_worker.py:554\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/v1/worker/gpu_worker.py#L554\" title=\"原始文件\">原始文件</a>", "<b>capture_model</b> <code>vllm/v1/worker/gpu_model_runner.py:6002</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/v1/worker/gpu_model_runner.py:6002\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/v1/worker/gpu_model_runner.py:6002\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/v1/worker/gpu_model_runner.py#L6002\" title=\"原始文件\">原始文件</a>"]}], "navGroup": "启动时序"}, {"id": "s07", "title": "S07 HTTP 层装配与 ready", "meta": "API 进程内 · async", "desc": "FastAPI 应用、serving 状态与 uvicorn 启动。", "steps": [{"num": "1", "title": "build_and_serve：build_app", "types": ["sync"], "purpose": "构建 FastAPI 应用并挂载全部路由与中间件。", "input": "args、supported_tasks（get_supported_tasks 经 IPC 查询）", "output": "FastAPI app", "logic": ["build_app：FastAPI(lifespan=...) + CORSMiddleware + AuthenticationMiddleware + XRequestId + Scaling。", "异常处理器：RequestValidationError / EngineGenerateError / EngineDeadError / GenerationError / Exception。", "register_vllm_serve_api_routers（/health 等）+ register_generate_api_routers（chat/completions 等）。", "用户自定义 --middleware 注册。"], "next": "init_app_state（下一步）", "src": ["<b>build_and_serve</b> <code>vllm/entrypoints/openai/api_server.py:578</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/entrypoints/openai/api_server.py:578\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/entrypoints/openai/api_server.py:578\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/entrypoints/openai/api_server.py#L578\" title=\"原始文件\">原始文件</a>", "<b>build_app</b> <code>vllm/entrypoints/openai/api_server.py:157</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/entrypoints/openai/api_server.py:157\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/entrypoints/openai/api_server.py:157\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/entrypoints/openai/api_server.py#L157\" title=\"原始文件\">原始文件</a>"]}, {"num": "2", "title": "init_app_state：serving 对象与 warmup", "types": ["async", "sync"], "purpose": "创建 OpenAI 协议各 handler 并预热。", "input": "engine_client、model_config", "output": "app.state 就绪", "logic": ["load_chat_template（--chat-template，lru_cache）。", "OpenAIServingModels（模型注册表 + 静态 LoRA 加载）。", "OpenAIServingRender / OpenAIServingTokenization / init_generate_state。", "init_generate_state：OpenAIServingChat 构造（ParserManager 选 reasoning/tool parser；gpt-oss 置 harmony）+ warmup() 预编译模板渲染。"], "next": "serve_http（下一步）", "src": ["<b>init_app_state</b> <code>vllm/entrypoints/openai/api_server.py:317</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/entrypoints/openai/api_server.py:317\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/entrypoints/openai/api_server.py:317\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/entrypoints/openai/api_server.py#L317\" title=\"原始文件\">原始文件</a>", "<b>init_generate_state</b> <code>vllm/entrypoints/openai/generate/api_router.py:45</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/entrypoints/openai/generate/api_router.py:45\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/entrypoints/openai/generate/api_router.py:45\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/entrypoints/openai/generate/api_router.py#L45\" title=\"原始文件\">原始文件</a>", "<b>OpenAIServingChat.__init__</b> <code>vllm/entrypoints/openai/chat_completion/serving.py:91</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/entrypoints/openai/chat_completion/serving.py:91\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/entrypoints/openai/chat_completion/serving.py:91\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/entrypoints/openai/chat_completion/serving.py#L91\" title=\"原始文件\">原始文件</a>"]}, {"num": "3", "title": "uvicorn 监听与 ready 判定", "types": ["async"], "purpose": "uvicorn 开始 accept，watchdog 监控引擎存活。", "input": "socket、engine_client", "output": "HTTP 服务 ready", "logic": ["serve_http：打印路由表、uvicorn.Config/Server、watchdog_task。", "SIGINT/SIGTERM → server 优雅退出。", "ready = 引擎 READY 握手 + init_app_state 完成 + uvicorn startup 事件。", "/health → AsyncLLM.check_health（errored 标志检查，健康即 200，异常 503）。"], "next": "服务对外可用（请求链见请求链文档）", "src": ["<b>serve_http</b> <code>vllm/entrypoints/launcher.py:26</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/entrypoints/launcher.py:26\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/entrypoints/launcher.py:26\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/entrypoints/launcher.py#L26\" title=\"原始文件\">原始文件</a>", "<b>/health</b> <code>vllm/entrypoints/serve/instrumentator/health.py:22</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/entrypoints/serve/instrumentator/health.py:22\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/entrypoints/serve/instrumentator/health.py:22\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/entrypoints/serve/instrumentator/health.py#L22\" title=\"原始文件\">原始文件</a>", "<b>check_health</b> <code>vllm/v1/engine/async_llm.py:868</code> <a href=\"zed://file/opt/work/codes/github/vllm/vllm/v1/engine/async_llm.py:868\" title=\"在 Zed 中打开\">Zed</a> · <a href=\"cursor://file/opt/work/codes/github/vllm/vllm/v1/engine/async_llm.py:868\" title=\"在 Cursor 中打开\">Cursor</a> · <a href=\"../vllm/v1/engine/async_llm.py#L868\" title=\"原始文件\">原始文件</a>"], "tags": ["ready"]}], "navGroup": "启动时序"}]};
+</script>
+<script>
+"use strict";
+(function(){
+  const content = document.getElementById("content");
+  const toc = document.getElementById("toc");
+  const phaseNav = document.getElementById("phaseNav");
+  const typeFilter = document.getElementById("typeFilter");
+  const searchBoxes = [document.getElementById("searchBox"), document.getElementById("searchBox2")];
+  const searchStats = document.getElementById("searchStats");
+  const legend = document.getElementById("legend");
+
+  const TYPE_LABEL = {sync:"同步", async:"异步", threadpool:"线程池", ipc:"IPC", gpu:"GPU", sse:"SSE 流式", proc:"子进程", branch:"分支"};
+  // legend
+  legend.innerHTML = "<span style='font-weight:600'>调用类型：</span>" +
+    Object.entries(TYPE_LABEL).map(([k,v])=>`<span class="chip ${k}">${v}</span>`).join(" ");
+
+  // build types
+  const types = new Set();
+  DATA.phases.forEach(p=>p.steps.forEach(s=>(s.types||[]).forEach(t=>types.add(t))));
+  Object.keys(TYPE_LABEL).forEach(t=>{
+    if(types.has(t)){
+      const o=document.createElement("option"); o.value=t; o.textContent=TYPE_LABEL[t]; typeFilter.appendChild(o);
+    }
+  });
+
+  const esc = s => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  function escLinks(s){ // allow a[href] through esc
+    return String(s).replace(/&/g,"&amp;").replace(/"(?![^<]*>")/g,"&quot;");
+  }
+
+  // render phases & steps
+  const stepEls = [];
+  DATA.phases.forEach((phase, pi)=>{
+    const sec = document.createElement("section");
+    sec.className = "phase"; sec.id = phase.id;
+    const head = document.createElement("div"); head.className="phase-head";
+    head.innerHTML = `<h2>${esc(phase.title)}</h2><span class="meta">${esc(phase.meta||"")}</span>`;
+    sec.appendChild(head);
+    if(phase.desc){const d=document.createElement("div");d.className="phase-desc";d.innerHTML=phase.desc;sec.appendChild(d);}
+    phase.steps.forEach((step, si)=>{
+      const id = `${phase.id}-s${si+1}`;
+      step._id = id;
+      const card = document.createElement("article");
+      card.className = "step"; card.id = id;
+      const chips = (step.types||[]).map(t=>`<span class="chip ${t}">${TYPE_LABEL[t]||t}</span>`).join("") +
+        (step.tags||[]).map(t=>`<span class="chip branch">${esc(t)}</span>`).join("");
+      card.innerHTML = `
+        <div class="step-head">
+          <span class="step-num">${esc(step.num||String(si+1))}</span>
+          <div style="flex:1;min-width:0">
+            <div class="step-title">${esc(step.title)}</div>
+            <div class="step-chips">${chips}</div>
+          </div>
+        </div>
+        <div class="step-body">
+          ${step.purpose?`<div class="field"><div class="label">用途</div><div style="font-size:.88rem">${esc(step.purpose)}</div></div>`:""}
+          ${step.input?`<div class="field"><div class="label">入参</div><div style="font-size:.85rem;color:var(--fg2)">${esc(step.input)}</div></div>`:""}
+          ${step.output?`<div class="field"><div class="label">出参 / 副作用</div><div style="font-size:.85rem;color:var(--fg2)">${esc(step.output)}</div></div>`:""}
+          ${step.logic?`<div class="field"><div class="label">基础逻辑</div><ol>${step.logic.map(l=>`<li>${esc(l)}</li>`).join("")}</ol></div>`:""}
+          ${step.note?`<div class="note${step.noteKind?" "+step.noteKind:""}">${esc(step.note)}</div>`:""}
+          ${step.next?`<div class="next-hop"><span class="label">下一跳 →</span><div>${esc(step.next)}</div></div>`:""}
+          ${step.src?`<div class="src-links">${step.src.map(l=>`<span>${l}</span>`).join("")}</div>`:""}
+        </div>`;
+      sec.appendChild(card);
+      stepEls.push({step, card});
+    });
+    content.appendChild(sec);
+    // phase nav
+    const a=document.createElement("a"); a.href="#"+phase.id; a.textContent=phase.title.replace(/^P\d+\s*/,""); a.dataset.phase=phase.id;
+    phaseNav.appendChild(a);
+  });
+
+  // collapsible
+  content.addEventListener("click", e=>{
+    const h = e.target.closest(".step-head");
+    if(!h) return;
+    const body = h.parentElement.querySelector(".step-body");
+    const open = body.style.display !== "none";
+    body.style.display = open ? "none" : "";
+  });
+  function setAll(open){
+    content.querySelectorAll(".step-body").forEach(b=>b.style.display = open?"":"none");
+  }
+  document.getElementById("expandAll").onclick=()=>setAll(true);
+  document.getElementById("collapseAll").onclick=()=>setAll(false);
+
+  // src link helper expected format in data: {zed:"path:line", cur:"path:line", raw:"path:line", label}
+  // but simpler: data src entries are pre-rendered strings; we instead build them here from step.srcList
+  // (kept for compatibility)
+
+  // search & filter
+  let query="", typeSel="";
+  function applyFilter(){
+    let shown=0, total=stepEls.length;
+    const q = query.trim().toLowerCase();
+    stepEls.forEach(({step, card})=>{
+      const okType = !typeSel || (step.types||[]).includes(typeSel);
+      const hay = (step.title+" "+(step.purpose||"")+" "+(step.next||"")+" "+(step.srcText||"")).toLowerCase();
+      const okQ = !q || hay.includes(q);
+      const show = okType && okQ;
+      card.classList.toggle("hidden", !show);
+      if(show) shown++;
+    });
+    // hide empty phases
+    DATA.phases.forEach(p=>{
+      const sec=document.getElementById(p.id);
+      if(!sec) return;
+      const any = p.steps.some(s=>!document.getElementById(s._id).classList.contains("hidden"));
+      sec.style.display = any?"":"none";
+    });
+    searchStats.textContent = shown===total ? `共 ${total} 个步骤` : `匹配 ${shown} / ${total} 个步骤`;
+  }
+  function syncBoxes(v){searchBoxes.forEach(b=>{if(b.value!==v)b.value=v;});}
+  searchBoxes.forEach(b=>b.addEventListener("input", ()=>{query=b.value;syncBoxes(b.value);applyFilter();}));
+  typeFilter.addEventListener("change", ()=>{typeSel=typeFilter.value;applyFilter();});
+  applyFilter();
+
+  // theme
+  const saved = localStorage.getItem("vllm-doc-theme");
+  if(saved) document.documentElement.dataset.theme = saved;
+  else if(window.matchMedia("(prefers-color-scheme: dark)").matches) document.documentElement.dataset.theme="dark";
+  document.getElementById("themeToggle").onclick=()=>{
+    const t = document.documentElement.dataset.theme==="dark"?"light":"dark";
+    document.documentElement.dataset.theme=t; localStorage.setItem("vllm-doc-theme",t);
+  };
+
+  // sidebar toggle (mobile)
+  const sb=document.getElementById("sidebar");
+  document.getElementById("sidebarToggle").onclick=()=>sb.classList.toggle("open");
+  document.addEventListener("click", e=>{
+    if(window.innerWidth<=1000 && sb.classList.contains("open") && !sb.contains(e.target) && e.target.id!=="sidebarToggle")
+      sb.classList.remove("open");
+  });
+
+  // TOC build
+  const groups = {};
+  DATA.phases.forEach(p=>{
+    if(!groups[p.navGroup||""]) groups[p.navGroup||""]=[];
+    groups[p.navGroup||""].push({id:p.id,title:p.title,steps:p.steps});
+  });
+  Object.entries(groups).forEach(([g,phases])=>{
+    const gd=document.createElement("div"); gd.className="toc-group";
+    if(g){const t=document.createElement("div");t.className="toc-group-title";t.textContent=g;gd.appendChild(t);}
+    phases.forEach(p=>{
+      const pa=document.createElement("a"); pa.href="#"+p.id; pa.textContent=p.title.replace(/^P\d+\s*/,""); gd.appendChild(pa);
+      p.steps.forEach(s=>{
+        const sa=document.createElement("a"); sa.href="#"+s._id; sa.style.paddingLeft="18px"; sa.style.fontSize=".78rem";
+        sa.textContent=(s.num?s.num+" ":"")+s.title;
+        gd.appendChild(sa);
+      });
+    });
+    toc.appendChild(gd);
+  });
+
+  // scroll spy (simple)
+  const spy = ()=>{
+    let cur=null;
+    const ids=[...content.querySelectorAll(".phase")].map(p=>p.id);
+    for(const id of ids){const el=document.getElementById(id); if(el && el.getBoundingClientRect().top<120) cur=id;}
+    toc.querySelectorAll("a").forEach(a=>a.classList.toggle("active", a.getAttribute("href")==="#"+cur));
+    phaseNav.querySelectorAll("a").forEach(a=>a.classList.toggle("active", a.getAttribute("href")==="#"+cur));
+  };
+  window.addEventListener("scroll", spy, {passive:true}); spy();
+})();
+</script>
+</body>
+</html>
